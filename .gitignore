@@ -1,0 +1,27 @@
+# SPDX-FileCopyrightText: 2026 CHILI.CHIPS.LLC
+#
+# SPDX-License-Identifier: BSD-3-Clause
+
+# Editing
+*~
+*.bak
+*.swp
+
+# Build and run outputs (make in selftest/)
+obj/
+*.o
+*.d
+*.a
+*.so
+*.vpi
+*.log
+*.jou
+*.pb
+*.wdb
+xsim.dir/
+.Xil/
+
+# Waveforms
+*.vcd
+*.fst
+*.vvp

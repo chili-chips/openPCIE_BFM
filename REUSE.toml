@@ -1,0 +1,41 @@
+# SPDX-FileCopyrightText: 2026 CHILI.CHIPS.LLC
+#
+# SPDX-License-Identifier: BSD-3-Clause
+
+# When several annotations match a file, the LAST one in this file wins.
+#   precedence = "closest"  -> a file's own SPDX header wins; this is the fallback
+
+version = 1
+
+# Our own files: wrappers, PIPE adapters, the Artix-7 RC model, tools,
+# self-test, docs. A file's own SPDX header wins (pcieVHostPipexN.sv is
+# GPL-3.0-or-later, derived from upstream's pcieVHostPipex1).
+[[annotations]]
+path = ["**"]
+precedence = "closest"
+SPDX-FileCopyrightText = "2026 CHILI.CHIPS.LLC"
+SPDX-License-Identifier = "BSD-3-Clause"
+
+# wyvernSemi co-simulation VIP by Simon Southwell (VProc, pcieVHost,
+# mem_model), our changes to it (patches, the LTSSM helper, the mem_model
+# lint wrapper hdl/mem_model.sv), and the
+# pcieVHost manual's summary with its pictures.
+[[annotations]]
+path = ["vip/**", "patches/**", "ltssm/**", "doc/pcievhost/**", "hdl/mem_model.sv"]
+precedence = "closest"
+SPDX-FileCopyrightText = "2004-2025 Simon Southwell"
+SPDX-License-Identifier = "GPL-3.0-or-later"
+
+# Third-party logos, shown for acknowledgment only (NOT open-licensed)
+[[annotations]]
+path = ["doc/artwork/**"]
+precedence = "override"
+SPDX-FileCopyrightText = "Respective owners"
+SPDX-License-Identifier = "LicenseRef-Third-Party-Document"
+
+# ... except our index of the upstream copies
+[[annotations]]
+path = ["vip/README.md"]
+precedence = "closest"
+SPDX-FileCopyrightText = "2026 CHILI.CHIPS.LLC"
+SPDX-License-Identifier = "BSD-3-Clause"
