@@ -88,7 +88,7 @@ Two licenses, side by side, per file (`REUSE.toml`, `LICENSES/`; `reuse lint` pa
 
 ## Credits
 
-**This model stands on Simon Southwell's work.** pcieVHost (the PCIE link model: LTSSM, Data Link and Transaction layers, the C API), VProc (the virtual processor that runs C programs against HDL) and mem_model (the sparse memory model) are his, GPL-3.0-or-later. This repository carries copies of them with our changes; upstream stays the reference for the model and its manual. His help on openPCIE and openCologne-PCIE made a world of difference. Thank you, Simon!
+**This model stands on Simon Southwell's work.** pcieVHost (the PCIE link model: LTSSM, Data Link and Transaction layers, the C API), VProc (the virtual processor that runs C programs against HDL) and mem_model (the sparse memory model) are his, GPL-3.0-or-later. This repository carries copies of them with our changes; upstream stays the reference for the model and its manual. His help on _openPCIE_ and _openCologne-PCIE_ made a world of difference. Thank you, Simon!
 
 <p align="center">
   <a href="https://github.com/wyvernSemi"><img width="15%" alt="wyvernSemi logo" src="doc/artwork/wyvernSemi-logo-rounded.png"></a>
