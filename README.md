@@ -17,7 +17,7 @@
   <img alt="openPCIE_BFM logo" width="25%" src="0.doc/artwork/openPCIE_BFM.hex.png">
 </div>
 
-A PCIE simulation model (bus functional model) for PIPE-based PCIE designs, built on Simon Southwell's [pcieVHost](https://github.com/wyvernSemi/pcievhost) and [VProc](https://github.com/wyvernSemi/vproc). One model plays the Root Complex or the Endpoint, x1 or x4, Gen1 or Gen2, at the PIPE or on the serial line.
+A PCIE simulation model (bus functional model) for PIPE-based PCIE designs, built on **Simon Southwell's [pcieVHost](https://github.com/wyvernSemi/pcievhost) and [VProc](https://github.com/wyvernSemi/vproc)**. One model plays the Root Complex or the Endpoint, x1 or x4, Gen1 or Gen2, at the PIPE or on the serial line.
 
 It is shared by [openPCIE](https://github.com/chili-chips/openPCIE) (Artix-7 Root Complex) and [openCologne-PCIE](https://github.com/chili-chips/openCologne-PCIE) (GateMate Endpoint), as a git submodule of both.
 
