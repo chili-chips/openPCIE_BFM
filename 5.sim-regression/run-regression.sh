@@ -34,7 +34,7 @@ declare -A CONFIGS=(          # name: make variables
 ORDER="default x1 x1-a7rc x4 phy x4-phy a7rc gen1"
 
 # sim:config: "issue|signature in the log (grep -E)"
-ICARUS_XN="Icarus: PIPExN__pcieVHost.sv does not parse|PIPExN__pcieVHost.sv"
+ICARUS_XN="iverilog#1789, automatic variable in PIPExN__pcieVHost.sv|PIPExN__pcieVHost.sv"
 declare -A KNOWN=(
     [icarus:default]=$ICARUS_XN
     [icarus:x4]=$ICARUS_XN
@@ -42,9 +42,9 @@ declare -A KNOWN=(
     [icarus:x4-phy]=$ICARUS_XN
     [icarus:a7rc]=$ICARUS_XN
     [icarus:gen1]=$ICARUS_XN
-    [janushdl:x4]="JanusHDL: a cast in pcieVHostPipexN.sv|pcieVHostPipexN.sv"
-    [janushdl:phy]="JanusHDL: pipe_mac_adapter.sv assertions|pipe_mac_adapter.sv"
-    [janushdl:x4-phy]="JanusHDL: pipe_mac_adapter.sv assertions|pipe_mac_adapter.sv"
+    [janushdl:x4]="openPCIE_BFM#1, JanusHDL size cast in pcieVHostPipexN.sv|pcieVHostPipexN.sv"
+    [janushdl:phy]="openCologne-PCIE#1, JanusHDL assertions in pipe_mac_adapter.sv|pipe_mac_adapter.sv"
+    [janushdl:x4-phy]="openCologne-PCIE#1, JanusHDL assertions in pipe_mac_adapter.sv|pipe_mac_adapter.sv"
 )
 
 report() {  # name, seconds, pass (0/1), what, result, [known: "issue|signature"]

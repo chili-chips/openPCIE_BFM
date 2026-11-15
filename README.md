@@ -68,9 +68,19 @@ Results (WSL2 Ubuntu 24.04, run time without the build; `WRAP=x1` is x1 Gen1, `L
 | Simulator | default | `WRAP=x1` | `LANES=4` | `PHY=core` |
 |---|---|---|---|---|
 | 🟢 Verilator 5.055 | PASS, 1.9 s | PASS, 1.6 s | PASS, 2.5 s | PASS, 1.9 s |
-| 🟠 Icarus 14.0 (devel) | no: `PIPExN__pcieVHost.sv` does not parse (automatic variable in an `always`) | PASS, 4.2 s | no, as default | no, as default |
+| 🟠 Icarus 14.0 (devel) | no: `PIPExN__pcieVHost.sv` does not parse (automatic variable in an `always`, [iverilog#1789](https://github.com/steveicarus/iverilog/issues/1789)) | PASS, 4.2 s | no, as default | no, as default |
 | 🟢 Vivado XSIM 2026.1 | PASS, 8.1 s | PASS, 7.8 s | PASS, 9.8 s | PASS, 10.0 s |
 | 🟠 JanusHDL 0.17.0 | PASS, 32 s | PASS, 27 s | no: a cast in `pcieVHostPipexN.sv` not supported at run time | no: `pipe_mac_adapter.sv` assertions do not parse |
+
+**Issues filed upstream**, still open:
+
+| Tool | Issue | What | State |
+|---|---|---|---|
+| Icarus Verilog | [iverilog#1789](https://github.com/steveicarus/iverilog/issues/1789), ours [#2](https://github.com/chili-chips/openPCIE_BFM/issues/2) | an `automatic` variable in a static `always` block (`PIPExN__pcieVHost.sv:120`) | open |
+| JanusHDL | [#1](https://github.com/chili-chips/openPCIE_BFM/issues/1) | a size cast by a parameter, `W'(x)`, at run time (`LANES=4`) | open |
+| JanusHDL | [openCologne-PCIE#1](https://github.com/chili-chips/openCologne-PCIE/issues/1) | no assertions yet; a labelled one gives a parse error (`PHY=core`) | open |
+
+JanusHDL has no public tracker (closed source, so it can read encrypted IP): its issues are in our repos, under the [`JanusHDL` label](https://github.com/issues?q=org%3Achili-chips+label%3AJanusHDL).
 
 Needs gcc/g++, make, patch, and the simulator. Icarus needs its `vpi_user.h`; XSIM finds Vivado via `XILINX_VIVADO`.
 
