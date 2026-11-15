@@ -41,7 +41,7 @@ This VIP is used within [openPCIE](https://github.com/chili-chips/openPCIE) (Art
 > pcieVHost set up as the AMD `PCIE_2_1` root port, calibrated against the hard macro. It trains the link, runs the RC firmware's requests and checks the Endpoint against 59 rules of the PCIE spec.
 
 #### Fixes and new features
-> Gen2 speed change through Recovery, lane reversal and polarity, one electrical-idle rule with no X or Z, transaction taps, fault injection, co-routines in VProc (about 22 times faster). Details: [0.doc/pcievhost](0.doc/pcievhost/README.md), [openPCIE simulation README](https://github.com/chili-chips/openPCIE/blob/main/5.sim/README.md#pcievhost-what-we-added-or-removed).
+> Gen2 speed change through Recovery, lane reversal and polarity, one electrical-idle rule with no X or Z, transaction taps, fault injection, co-routines in VProc (about 22 times faster). Details: [what we added or removed](0.doc/model-changes.md#pcievhost-what-we-added-or-removed), [the issues we fixed](0.doc/model-changes.md#simulation-issues).
 
 #### PIPE adapters
 > Our wrappers put the model on a PIPE link (x1 or x4), offer the link at the PIPE, Data Link and Transaction layers for waveform decoders, and act as the MAC or the PHY side of a PIPE with its handshakes.
@@ -58,6 +58,7 @@ This VIP is used within [openPCIE](https://github.com/chili-chips/openPCIE) (Art
 | `4.build/` | `vip-import.sh` (upstream to `1.upstream/vip/`), `build-vip.sh` (libraries and HDL), `regress.sh` (seeds), `wavecrux.py` (a run in WaveCrux at the first violation), `wavecrux-session.py` (a WaveCrux session for a dump), `lint.verible` (the lint rules) | BSD-3-Clause |
 | `5.sim-regression/` | the self-test: the RC model against the Endpoint model, back to back; sanity and regression lists | BSD-3-Clause |
 | `0.doc/pcievhost/` | how to configure and drive the model | GPL-3.0-or-later |
+| `0.doc/` | [the RC model and its 59 rules](0.doc/rc-model.md), [integration notes](0.doc/integration.md) (adapters, taps, VProc and mem_model, build defines), [changes to upstream](0.doc/model-changes.md) | BSD-3-Clause |
 
 ### Self-test
 
@@ -163,8 +164,23 @@ The RC model is calibrated against the AMD (Xilinx) 7 Series `PCIE_2_1` hard mac
 - [PCI Express Primer](http://www.anita-simulators.org.uk/wyvernsemi/articles/pci_express.pdf), Simon Southwell
 - [openPCIE](https://github.com/chili-chips/openPCIE) and [openCologne-PCIE](https://github.com/chili-chips/openCologne-PCIE): the projects this model came from
 - [WaveCrux](https://wavecrux.app) and [wavecrux-decoders](https://github.com/Ferrite-Engineering/wavecrux-decoders), Ferrite Engineering: the waveform viewer and the PCIE protocol decoders we cross-check with
-- AMD (Xilinx) [UG477](https://docs.xilinx.com/v/u/en-US/ug477_7Series_IntBlock_PCIe):
+- AMD (Xilinx) [UG477](https://docs.xilinx.com/v/u/en-US/ug477_7Series_IntBlock_PCIe): 7 Series FPGAs Integrated Block for PCI Express, the `PCIE_2_1` hard macro the RC model is calibrated against
 - [cocotbext-pcie](https://github.com/alexforencich/cocotbext-pcie), Alex Forencich: a PCIE transaction-level model for cocotb (Python), related work
+- [ngscopeclient](https://www.ngscopeclient.org): open-source signal analysis for oscilloscopes and logic analyzers, with protocol decoders
+
+---
+---
+# Community Outreach
+
+**Issues filed upstream** from this project, open and closed. Details of the open ones: [Self-test](#self-test). The model's earlier issues, from the openPCIE work it came from: [openPCIE](https://github.com/chili-chips/openPCIE#community-outreach).
+
+| Tool / project | Issue | What | State |
+|---|---|---|---|
+| Icarus Verilog | [iverilog#1789](https://github.com/steveicarus/iverilog/issues/1789), ours [#2](https://github.com/chili-chips/openPCIE_BFM/issues/2) | an `automatic` variable in a static `always` block (`PIPExN__pcieVHost.sv:120`) | open |
+| JanusHDL | [#1](https://github.com/chili-chips/openPCIE_BFM/issues/1) | 0.17.0: a size cast by a parameter, `W'(x)`, at run time (`LANES=4`) | open |
+| JanusHDL | [openCologne-PCIE#1](https://github.com/chili-chips/openCologne-PCIE/issues/1) | 0.17.0: no assertions yet; a labelled one gives a parse error (`PHY=core`) | open |
+
+JanusHDL has no public tracker (closed source, so it can read encrypted IP): its issues are in our repos, under the [`JanusHDL` label](https://github.com/issues?q=org%3Achili-chips+label%3AJanusHDL).
 
 ---
 ---
