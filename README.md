@@ -17,19 +17,36 @@
   <img alt="openPCIE_BFM logo" width="25%" src="0.doc/artwork/openPCIE_BFM.hex.png">
 </div>
 
-A PCIE simulation model (bus functional model) for PIPE-based PCIE designs, built on **Simon Southwell's [pcieVHost](https://github.com/wyvernSemi/pcievhost) and [VProc](https://github.com/wyvernSemi/vproc)**. One model plays the Root Complex or the Endpoint, x1 or x4, Gen1 or Gen2, at the PIPE or on the serial line. Above the PIPE, it gives access to the Data Link and Transaction layers: taps that show every DLLP and TLP to waveform decoders and checkers, and a C API that sends and checks transactions.
+A PCIE simulation model (bus functional model) for PIPE-based PCIE designs, built on **Simon Southwell's [pcieVHost](https://github.com/wyvernSemi/pcievhost) and [VProc](https://github.com/wyvernSemi/vproc)**. This single model plays:
+- **Root Complex** or **Endpoint**
+- **x1** or **x4**
+- **Gen1** or **Gen2**
+- **PIPE** or **Serial Line**
 
-**Cross-checked with the [WaveCrux](https://wavecrux.app) Protocol Decoders.** Ferrite's PIPE and Data Link Layer decoders and the openPCIE TLP decoder read the same link in the waveform. Model and decoders were brought up against each other: each one checks the other. To our knowledge, this makes it the first open-source PCIE transaction generator and protocol checker that is calibrated against a hard PCIE macro and cross-checked by independent protocol decoders.
+Above the PIPE, it also **gives access to the Data Link and Transaction layers**: taps that show every DLLP and TLP to waveform decoders and checkers, as well as a C API that sends and checks transactions.
 
-It is shared by [openPCIE](https://github.com/chili-chips/openPCIE) (Artix-7 Root Complex) and [openCologne-PCIE](https://github.com/chili-chips/openCologne-PCIE) (GateMate Endpoint), as a git submodule of both.
+`Cross-checked with Xilinx/AMD PCIE_2_1 HM within Artix7 FPGAs`
+> Simulated side-by-side with PCIE_2_1 HM, which played the role of golden model
 
-What it adds to upstream pcieVHost:
+`Cross-checked with the [WaveCrux](https://wavecrux.app) Protocol Decoders`
+> Ferrite's _PIPE_ and _Data Link Layer_ decoders and the _openPCIE TLP_ decoder read the same link in the waveform. Model and decoders were brought up against each other to check each other
 
-- **PIPE adapters.** Our wrappers put the model on a PIPE link (x1 or x4), offer the link at the PIPE, Data Link and Transaction layers for waveform decoders, and act as the MAC or the PHY side of a PIPE with its handshakes.
-- **The Artix-7 RC model.** pcieVHost set up as the AMD `PCIE_2_1` root port, calibrated against the hard macro. It trains the link, runs the RC firmware's requests and checks the Endpoint against 59 rules of the PCIE spec.
-- **Model fixes and features.** Gen2 speed change through Recovery, lane reversal and polarity, one electrical-idle rule with no X or Z, transaction taps, fault injection, coroutines in VProc (about 22 times faster). Details: [0.doc/pcievhost](0.doc/pcievhost/README.md) and the [openPCIE simulation README](https://github.com/chili-chips/openPCIE/blob/main/5.sim/README.md#pcievhost-what-we-added-or-removed).
+To our knowledge, this makes openPCI_BFM the first open-source PCIE transaction generator and protocol checker that is calibrated against both an industry-standard, silicon-proven PCIE hard macro and cross-checked by 3rd party protocol decoders.
 
-## Layout
+
+### Ecosystem
+This VIP is used within [openPCIE](https://github.com/chili-chips/openPCIE) (Artix-7 Root Complex) and [openCologne-PCIE](https://github.com/chili-chips/openCologne-PCIE) (GateMate Endpoint), as a git submodule of both. What it adds to the upstream _pcieVHost_:
+
+#### The Artix-7 RC model
+> pcieVHost set up as the AMD `PCIE_2_1` root port, calibrated against the hard macro. It trains the link, runs the RC firmware's requests and checks the Endpoint against 59 rules of the PCIE spec.
+
+#### Fixes and new features
+> Gen2 speed change through Recovery, lane reversal and polarity, one electrical-idle rule with no X or Z, transaction taps, fault injection, co-routines in VProc (about 22 times faster). Details: [0.doc/pcievhost](0.doc/pcievhost/README.md), [openPCIE simulation README](https://github.com/chili-chips/openPCIE/blob/main/5.sim/README.md#pcievhost-what-we-added-or-removed).
+
+#### PIPE adapters
+> Our wrappers put the model on a PIPE link (x1 or x4), offer the link at the PIPE, Data Link and Transaction layers for waveform decoders, and act as the MAC or the PHY side of a PIPE with its handshakes.
+
+### Project Layout
 
 | Path | What | License |
 |---|---|---|
@@ -128,7 +145,7 @@ Two licenses, side by side, per file (`REUSE.toml`, `LICENSES/`; `reuse lint` pa
 **WaveCrux, by Ferrite Engineering, is our second pair of eyes.** Its PIPE and Data Link Layer protocol decoders read every link this model drives, independently of it; model and decoders were brought up against each other, so each one checks the other. They fixed the decoder timing in WaveCrux 1.0.1 on our report, wrote the PIPE, Data Link Layer and serial-line decoders for openPCIE and openCologne-PCIE, and host our TLP decoder in [wavecrux-decoders](https://github.com/Ferrite-Engineering/wavecrux-decoders). Thank you, Ferrite!
 
 <div align="center">
-  <a href="https://wavecrux.app"><img width="15%" alt="WaveCrux logo" src="0.doc/artwork/WaveCrux.logo.png"></a>
+  <a href="https://wavecrux.app"><img width="30%" alt="WaveCrux logo" src="0.doc/artwork/WaveCrux.logo.png"></a>
 </div>
 
 The PIPE adapters and the Artix-7 RC model are by Chili.CHIPS; this repository is volunteer work. They were proven in the test and validation jigs of our two PCIE projects, both sponsored by [NLnet](https://nlnet.nl):
@@ -146,6 +163,7 @@ The RC model is calibrated against the AMD (Xilinx) 7 Series `PCIE_2_1` hard mac
 - [PCI Express Primer](http://www.anita-simulators.org.uk/wyvernsemi/articles/pci_express.pdf), Simon Southwell
 - [openPCIE](https://github.com/chili-chips/openPCIE) and [openCologne-PCIE](https://github.com/chili-chips/openCologne-PCIE): the projects this model came from
 - [WaveCrux](https://wavecrux.app) and [wavecrux-decoders](https://github.com/Ferrite-Engineering/wavecrux-decoders), Ferrite Engineering: the waveform viewer and the PCIE protocol decoders we cross-check with
+- AMD (Xilinx) [UG477](https://docs.xilinx.com/v/u/en-US/ug477_7Series_IntBlock_PCIe):
 - [cocotbext-pcie](https://github.com/alexforencich/cocotbext-pcie), Alex Forencich: a PCIE transaction-level model for cocotb (Python), related work
 
 ---
@@ -161,7 +179,6 @@ The model is **`purposely designed to run on open-source and/or free simulators`
 </div>
 
 <div align="center">
-  <a href="https://wavecrux.app"><img width="25%" alt="WaveCrux logo" src="0.doc/artwork/WaveCrux.logo.png"></a>
   <a href="https://github.com/chipsalliance/verible"><img width="18%" alt="Verible logo" src="0.doc/artwork/Verible.logo.png"></a>
 </div>
 
