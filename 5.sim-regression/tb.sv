@@ -299,6 +299,38 @@ module tb;
       .rx_peer_valid      ()
   );
 
+`ifdef WAVES
+  // make WAVES=1: the waveform for WaveCrux (tb.fst; XSIM and JanusHDL write
+  // tb.vcd, the Makefile converts it). Only the RC wrapper's own level: its
+  // reset and rate, and its taps, which carry the link at the PIPE
+  // (pipe_dn_*, pipe_up_*, lane 0), the DLLPs (dllp_*) and the TLPs (tx_*,
+  // rx_*) both ways; the model below it would make the file many times
+  // larger. Not tb itself: XSIM then drops the scopes below it.
+`ifdef WAVES_X4
+  // all four lanes, for the multi-lane PIPE and Data Link Layer decoders
+  pipe_x4_view #(
+      .DataWidth (16)
+  ) pipe_view (
+      .pclk (pclk),
+      .dn   (rc_tx_data),
+      .dnk  (rc_tx_datak),
+      .up   (ep_tx_data),
+      .upk  (ep_tx_datak)
+  );
+`endif
+  initial begin
+`ifdef WAVES_VCD
+    $dumpfile("tb.vcd");
+`else
+    $dumpfile("tb.fst");
+`endif
+`ifdef WAVES_X4
+    $dumpvars(1, pipe_view);
+`endif
+    $dumpvars(1, u_rc);
+  end
+`endif
+
   // Called by the pcieVHost `fatal macro (test_defs.svh): the RC model's FAIL
   task Fatal;
     begin

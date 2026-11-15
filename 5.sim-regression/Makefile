@@ -12,6 +12,7 @@
 #   make regress           the tester over seeds 1 to SEEDS
 #   make sanity            the sanity list (run-sanity.sh), a few minutes
 #   make regression        the regression list (run-regression.sh)
+#   make lint              Verible on our SystemVerilog (../4.build/lint.verible)
 #   make clean             removes work/
 #
 # Everything a build or run makes goes to work/: work/<SIM>/<config>/ (the
@@ -30,6 +31,9 @@
 # RUN_US time limit in us (default 2000)
 # SEEDS  make regress: seeds 1 to SEEDS (default 10), REGRESS_JOBS at a time
 #        (default 4), by ../4.build/regress.sh; Verilator or Icarus
+# WAVES  1: make run also writes the waveform, work/waves/<SIM>.<config>.fst,
+#        and a WaveCrux session for it, work/waves/<SIM>.<config>.wavecrux
+#        (../4.build/wavecrux-session.py; default 0)
 #
 # The VIP (VProc, pcieVHost, mem_model) is built once by ../4.build/build-vip.sh
 # into ~/.cache/openPCIE_BFM/vip, with 1.upstream/patches/pcievhost-speed.patch and
@@ -44,6 +48,7 @@ PHY    ?= none
 A7RC   ?= 0
 SEED   ?= 1
 RUN_US ?= 2000
+WAVES  ?= 0
 
 ifeq ($(filter n x1,$(WRAP)),)
   $(error WRAP must be n or x1 (got "$(WRAP)"))
@@ -69,6 +74,9 @@ endif
 ifeq ($(filter 0 1,$(A7RC)),)
   $(error A7RC must be 0 or 1 (got "$(A7RC)"))
 endif
+ifeq ($(filter 0 1,$(WAVES)),)
+  $(error WAVES must be 0 or 1 (got "$(WAVES)"))
+endif
 
 SEEDS         ?= 10
 REGRESS_JOBS  ?= 4
@@ -79,7 +87,8 @@ REGRESS_QUIET ?= 1
 BFM        := $(abspath $(CURDIR)/..)
 WORK       := $(CURDIR)/work
 CFG         = $(WRAP).x$(LANES)g$(GEN).$(PHY)$(if $(filter 1,$(A7RC)),.a7rc)
-OBJDIR      = $(WORK)/$(SIM)/$(CFG)
+OBJDIR      = $(WORK)/$(SIM)/$(CFG)$(if $(filter 1,$(WAVES)),.waves)
+WAVES_OUT   = $(WORK)/waves/$(SIM).$(CFG)
 
 # ---- tools --------------------------------------------------------------------
 HOST_CC    ?= gcc
@@ -141,13 +150,22 @@ HDL_SRC     = $(VIP_DIR)/hdl/headers/allheaders.svh \
               $(if $(USE_XN),$(BFM)/2.rtl/pcieVHostPipexN.sv $(BFM)/2.rtl/PIPExN__pcieVHost.sv) \
               $(if $(USE_X1),$(BFM)/2.rtl/PIPEx1__pcieVHost.sv $(BFM)/2.rtl/RCPIPEx1__pcieVHost.sv) \
               $(if $(or $(HDL_ALL),$(filter core,$(PHY))),$(BFM)/2.rtl/pipe_phy_core.sv $(BFM)/2.rtl/pipe_mac_adapter.sv) \
-              $(if $(HDL_ALL),$(BFM)/2.rtl/pipe_x4_view.sv) \
+              $(if $(or $(HDL_ALL),$(WAVES_X4)),$(BFM)/2.rtl/pipe_x4_view.sv) \
               $(CURDIR)/tb.sv
 HDL_DEFS    = VPROC_BYTE_ENABLE SIM_LANES=$(LANES) RUN_US=$(RUN_US) $(if $(filter core,$(PHY)),SIM_PIPE_PHY) \
-              $(if $(filter x1,$(WRAP)),SIM_PIPEX1) $(if $(filter-out icarus,$(SIM)),VPROC_SV)
+              $(if $(filter x1,$(WRAP)),SIM_PIPEX1) $(if $(filter-out icarus,$(SIM)),VPROC_SV) $(WAVES_DEFS)
+
+# make WAVES=1: the dump in tb.sv; Verilator and Icarus write FST, XSIM and
+# JanusHDL VCD (converted by vcd2fst)
+WAVES_ON    = $(filter 1,$(WAVES))
+WAVES_X4    = $(and $(WAVES_ON),$(filter 4,$(LANES)))
+WAVES_VCD   = $(and $(WAVES_ON),$(filter xsim janushdl,$(SIM)))
+WAVES_DEFS  = $(if $(WAVES_ON),WAVES) $(if $(WAVES_X4),WAVES_X4) $(if $(WAVES_VCD),WAVES_VCD)
+VCD2FST    ?= vcd2fst
+PYTHON     ?= python3
 
 # =============================================================================
-.PHONY: all run all-sims regress sanity regression clean help FORCE
+.PHONY: all run all-sims regress lint sanity regression clean help FORCE
 .DEFAULT_GOAL := all
 
 $(OBJDIR):
@@ -173,7 +191,7 @@ ifeq ($(SIM),verilator)
 SIMEXE      = $(OBJDIR)/Vtb
 $(SIMEXE): $(USERLIB) FORCE
 	@[ $(USERLIB) -nt $@ ] && rm -f $@; true
-	@$(VERILATOR) --binary -sv --timing --top-module tb -Mdir $(OBJDIR) \
+	@$(VERILATOR) --binary -sv --timing --top-module tb -Mdir $(OBJDIR) $(if $(WAVES_ON),--trace-fst) \
 	    -Wno-fatal -Wno-WIDTH -Wno-lint -Wno-style \
 	    $(addprefix +incdir+,$(HDL_INC)) $(addprefix +define+,$(HDL_DEFS)) $(HDL_SRC) \
 	    -MAKEFLAGS "--quiet CFG_LDFLAGS_VERILATED=" -CFLAGS "$(CPPSTD) -Wno-attributes" \
@@ -191,7 +209,7 @@ $(OBJDIR)/VProc.vpi: $(USERLIB)
 	    -L$(ICA_LIB) -lvpi -lrt -ldl
 $(SIMEXE): $(OBJDIR)/VProc.vpi FORCE
 	@$(IVERILOG) -g2012 -o $@ -s tb $(addprefix -I,$(HDL_INC)) $(addprefix -D,$(HDL_DEFS)) $(HDL_SRC)
-SIM_CMD     = $(VVP) -n -M $(OBJDIR) -m VProc $(SIMEXE)
+SIM_CMD     = $(VVP) -n -M $(OBJDIR) -m VProc $(SIMEXE) $(if $(WAVES_ON),-fst)
 endif
 
 # ---- XSIM and JanusHDL: the models as a DPI-C library, VProc.so ---------------
@@ -207,7 +225,8 @@ ifeq ($(SIM),xsim)
 SIMEXE      = $(OBJDIR)/xsim.dir/tb/xsimk
 $(SIMEXE): $(OBJDIR)/VProc.so FORCE
 	@cd $(OBJDIR) && $(XVLOG) -sv --nolog $(addprefix -i ,$(HDL_INC)) $(addprefix --define ,$(HDL_DEFS)) $(HDL_SRC) > xvlog.out || { cat xvlog.out; exit 1; }
-	@cd $(OBJDIR) && $(XELAB) --nolog -sv_root $(OBJDIR) -sv_lib VProc --timescale 1ps/1ps --snapshot tb work.tb > xelab.out || { cat xelab.out; exit 1; }
+	@cd $(OBJDIR) && $(XELAB) --nolog -sv_root $(OBJDIR) -sv_lib VProc --timescale 1ps/1ps $(if $(WAVES_ON),--debug typical) \
+	    --snapshot tb work.tb > xelab.out || { cat xelab.out; exit 1; }
 SIM_CMD     = $(XSIM) --nolog -R tb
 endif
 
@@ -226,8 +245,14 @@ all: $(SIMEXE)
 # exit code is 0 only on RC MODEL RESULT: PASS (xsim exits 0 after $fatal)
 run: all
 	@cp -f $(CURDIR)/hex/ContDisps.hex $(OBJDIR)/hex/
-	@cd $(OBJDIR) && A7RC_SEED=$(SEED) $(SIM_CMD) 2>&1 | tee run.log; \
-	grep -a -q 'RC MODEL RESULT: PASS' run.log
+	@cd $(OBJDIR) && rm -f tb.fst tb.vcd && A7RC_SEED=$(SEED) $(SIM_CMD) 2>&1 | tee run.log; \
+	r=0; grep -a -q 'RC MODEL RESULT: PASS' run.log || r=1; \
+	if [ -n "$(WAVES_ON)" ]; then \
+	  mkdir -p $(WORK)/waves; \
+	  if [ -n "$(WAVES_VCD)" ]; then timeout 600 $(VCD2FST) tb.vcd $(WAVES_OUT).fst > /dev/null && rm -f tb.vcd; \
+	  else mv -f tb.fst $(WAVES_OUT).fst; fi; \
+	  $(PYTHON) $(BFM)/4.build/wavecrux-session.py x$(LANES) $(WAVES_OUT).fst $(WAVES_OUT).wavecrux || r=1; \
+	fi; exit $$r
 
 # Every simulator in turn, one line each: result and wall time
 all-sims:
@@ -242,6 +267,14 @@ regress: all
 	@[ -n "$(filter verilator icarus,$(SIM))" ] || { echo "make regress: SIM=verilator or icarus"; exit 1; }
 	@bash $(BFM)/4.build/regress.sh $(SEEDS) $(REGRESS_JOBS) $(REGRESS_S) $(REGRESS_TRIES) $(REGRESS_QUIET) \
 	    $(WORK)/regress/$(SIM).$(CFG) "" -- $(SIM_CMD)
+
+# Verible on our SystemVerilog: 2.rtl/ but the GPL files from upstream
+# (pcieVHostPipexN.sv, mem_model.sv), and the test bench
+VERIBLE_LINT ?= verible-verilog-lint
+LINT_SRC      = $(filter-out %/pcieVHostPipexN.sv %/mem_model.sv,$(wildcard $(BFM)/2.rtl/*.sv)) $(CURDIR)/tb.sv
+
+lint:
+	@$(VERIBLE_LINT) --rules_config=$(BFM)/4.build/lint.verible $(LINT_SRC) && echo "lint: Verible, $(words $(LINT_SRC)) files, clean"
 
 sanity:
 	@bash run-sanity.sh

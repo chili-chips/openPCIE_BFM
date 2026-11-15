@@ -36,7 +36,7 @@ What it adds to upstream pcieVHost:
 | `3.sw/ltssm/` | the LTSSM helper both nodes link in: `ltssm.c` (ours), `ltssm.c.orig` (upstream), `ltssm-openpcie.patch` | GPL-3.0-or-later |
 | `1.upstream/patches/` | our changes to upstream: `pcievhost-taps.patch` (applied at import), `pcievhost-speed.patch`, `vproc-coroutine.patch` (applied at build) | GPL-3.0-or-later |
 | `1.upstream/vip/` | upstream copies: VProc, pcieVHost, mem_model ([versions](1.upstream/vip/README.md)) | GPL-3.0-or-later |
-| `4.build/` | `vip-import.sh` (upstream to `1.upstream/vip/`), `build-vip.sh` (libraries and HDL), `regress.sh` (seeds), `wavecrux.py` (a run in WaveCrux at the first violation) | BSD-3-Clause |
+| `4.build/` | `vip-import.sh` (upstream to `1.upstream/vip/`), `build-vip.sh` (libraries and HDL), `regress.sh` (seeds), `wavecrux.py` (a run in WaveCrux at the first violation), `wavecrux-session.py` (a WaveCrux session for a dump), `lint.verible` (the lint rules) | BSD-3-Clause |
 | `5.sim-regression/` | the self-test: the RC model against the Endpoint model, back to back; sanity and regression lists | BSD-3-Clause |
 | `0.doc/pcievhost/` | how to configure and drive the model | GPL-3.0-or-later |
 
@@ -54,6 +54,7 @@ make all-sims             # each simulator, one line each
 make regress SEEDS=10     # the tester over seeds 1 to 10 (Verilator, Icarus)
 make sanity               # the sanity list
 make regression           # the regression list
+make lint                 # Verible on our SystemVerilog (4.build/lint.verible)
 make clean                # removes work/
 ```
 
@@ -83,6 +84,12 @@ Results (WSL2 Ubuntu 24.04, run time without the build; `WRAP=x1` is x1 Gen1, `L
 JanusHDL has no public tracker (closed source, so it can read encrypted IP): its issues are in our repos, under the [`JanusHDL` label](https://github.com/issues?q=org%3Achili-chips+label%3AJanusHDL).
 
 Needs gcc/g++, make, patch, and the simulator. Icarus needs its `vpi_user.h`; XSIM finds Vivado via `XILINX_VIVADO`.
+
+### Waveforms
+
+`make WAVES=1 run` (any option, any simulator) also writes `work/waves/<SIM>.<config>.fst` and a [WaveCrux](https://wavecrux.app) session for it, `work/waves/<SIM>.<config>.wavecrux`: open the session (File > Open). It shows the link both ways, RC -> EP blue, EP -> RC orange: lane 0 at the PIPE (all four at `LANES=4`), the DLLPs and the TLPs, with Ferrite's PIPE and Data Link Layer decoders and the openPCIE TLP decoder. The LTSSM runs in C (`3.sw/ltssm`): the PIPE decoder shows its ordered sets.
+
+A session binds by signal number, which differs between simulators, so each FST gets its own (`4.build/wavecrux-session.py`). The two next to the Makefile are for Verilator's default and `LANES=4` dumps: `tb.x1g2.TLP-DLL-PIPE.wavecrux`, `tb.x4g1.TLP-DLL-PIPE.wavecrux`. Needs `fst2vcd` (GTKWave), and `vcd2fst` for XSIM and JanusHDL, which write VCD.
 
 ### How to use it in your project
 
@@ -148,7 +155,7 @@ The model is **`purposely designed to run on open-source and/or free simulators`
 
 - **Simulators and Linters**: [Verilator](https://www.veripool.org/verilator), [Icarus Verilog](https://github.com/steveicarus/iverilog), [JanusHDL](https://que.no/janushdl/), Vivado XSIM
 - **Waveforms, Protocol Decoders, Checkers**: [WaveCrux](https://wavecrux.app)
-- **Neat Formatting**: [Verible](https://github.com/chipsalliance/verible)
+- **Neat Formatting, Lint**: [Verible](https://github.com/chipsalliance/verible), `make lint` in `5.sim-regression`
 
 ---
 ## GenAI

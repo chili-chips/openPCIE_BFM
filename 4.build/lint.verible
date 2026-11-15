@@ -1,0 +1,16 @@
+# SPDX-FileCopyrightText: 2026 Chili.CHIPS
+#
+# SPDX-License-Identifier: BSD-3-Clause
+#
+# Verible lint rules for make lint (5.sim-regression), --rules_config:
+# Verible's defaults, but
+# - parameters: CamelCase as pcieVHost names them (NodeNum, DataWidth), or
+#   our ALL_CAPS; localparams: ALL_CAPS or CamelCase
+# - no line limit: port lists and comment tables run past 100 columns, and
+#   the files are not run through verible-verilog-format
+# - tasks and functions in a module are static by default (IEEE 1800-2023
+#   13.3.1); writing "static" adds nothing
+parameter-name-style=parameter_style:CamelCase|ALL_CAPS;localparam_style:ALL_CAPS|CamelCase
+-line-length
+-explicit-task-lifetime
+-explicit-function-lifetime

@@ -1,0 +1,285 @@
+{
+  "version": 4,
+  "sourceFilePath": "work/waves/verilator.n.x1g2.none.fst",
+  "signals": [
+    {
+      "kind": "signal",
+      "id": "bfm-0",
+      "ref": "191",
+      "path": "tb.u_rc.nreset",
+      "name": "nreset",
+      "color": 4294962776,
+      "format": "hexadecimal",
+      "height": 30.0
+    },
+    {
+      "kind": "signal",
+      "id": "bfm-1",
+      "ref": "21",
+      "path": "tb.u_rc.gen2",
+      "name": "gen2",
+      "color": 4294962776,
+      "format": "hexadecimal",
+      "height": 30.0
+    },
+    {
+      "kind": "signal",
+      "id": "bfm-2",
+      "ref": "13",
+      "path": "tb.u_rc.pipe_dn_data",
+      "name": "pipe_dn_data",
+      "color": 4283417591,
+      "format": "hexadecimal",
+      "height": 30.0
+    },
+    {
+      "kind": "signal",
+      "id": "bfm-3",
+      "ref": "15",
+      "path": "tb.u_rc.pipe_dn_datak",
+      "name": "pipe_dn_datak",
+      "color": 4283417591,
+      "format": "hexadecimal",
+      "height": 30.0
+    },
+    {
+      "kind": "signal",
+      "id": "bfm-4",
+      "ref": "192",
+      "path": "tb.u_rc.pipe_up_data",
+      "name": "pipe_up_data",
+      "color": 4294948685,
+      "format": "hexadecimal",
+      "height": 30.0
+    },
+    {
+      "kind": "signal",
+      "id": "bfm-5",
+      "ref": "193",
+      "path": "tb.u_rc.pipe_up_datak",
+      "name": "pipe_up_datak",
+      "color": 4294948685,
+      "format": "hexadecimal",
+      "height": 30.0
+    },
+    {
+      "kind": "signal",
+      "id": "bfm-6",
+      "ref": "205",
+      "path": "tb.u_rc.dllp_dn_valid",
+      "name": "dllp_dn_valid",
+      "color": 4283417591,
+      "format": "hexadecimal",
+      "height": 30.0
+    },
+    {
+      "kind": "signal",
+      "id": "bfm-7",
+      "ref": "204",
+      "path": "tb.u_rc.dllp_dn_data",
+      "name": "dllp_dn_data",
+      "color": 4283417591,
+      "format": "hexadecimal",
+      "height": 30.0
+    },
+    {
+      "kind": "signal",
+      "id": "bfm-8",
+      "ref": "207",
+      "path": "tb.u_rc.dllp_up_valid",
+      "name": "dllp_up_valid",
+      "color": 4294948685,
+      "format": "hexadecimal",
+      "height": 30.0
+    },
+    {
+      "kind": "signal",
+      "id": "bfm-9",
+      "ref": "206",
+      "path": "tb.u_rc.dllp_up_data",
+      "name": "dllp_up_data",
+      "color": 4294948685,
+      "format": "hexadecimal",
+      "height": 30.0
+    },
+    {
+      "kind": "signal",
+      "id": "bfm-10",
+      "ref": "211",
+      "path": "tb.u_rc.tx_tlp_valid",
+      "name": "tx_tlp_valid",
+      "color": 4283417591,
+      "format": "hexadecimal",
+      "height": 30.0
+    },
+    {
+      "kind": "signal",
+      "id": "bfm-11",
+      "ref": "208",
+      "path": "tb.u_rc.tx_tlp_data",
+      "name": "tx_tlp_data",
+      "color": 4283417591,
+      "format": "hexadecimal",
+      "height": 30.0
+    },
+    {
+      "kind": "signal",
+      "id": "bfm-12",
+      "ref": "215",
+      "path": "tb.u_rc.rx_tlp_valid",
+      "name": "rx_tlp_valid",
+      "color": 4294948685,
+      "format": "hexadecimal",
+      "height": 30.0
+    },
+    {
+      "kind": "signal",
+      "id": "bfm-13",
+      "ref": "212",
+      "path": "tb.u_rc.rx_tlp_data",
+      "name": "rx_tlp_data",
+      "color": 4294948685,
+      "format": "hexadecimal",
+      "height": 30.0
+    }
+  ],
+  "cursor": {
+    "primary": null,
+    "secondary": null
+  },
+  "markers": {},
+  "view": {
+    "ticksPerPixel": 4016426.0,
+    "panOffsetTicks": 0.0,
+    "scrollOffset": 0.0
+  },
+  "panels": {
+    "signalTree": false,
+    "valueColumn": false,
+    "transactionView": false,
+    "stageView": false,
+    "statisticsStrip": false,
+    "cocotbLogPanel": false,
+    "rtlSource": false,
+    "sizes": {
+      "left": 301.6,
+      "right": 150.0
+    }
+  },
+  "signalTreeState": {
+    "expanded": [],
+    "selected": [],
+    "scroll": 0.0
+  },
+  "translateFilters": {},
+  "stage": {
+    "panels": []
+  },
+  "activeTheme": "wavecrux-dark",
+  "decoders": [
+    {
+      "decoderId": "ferrite.pcie_dll_w16",
+      "instanceNumber": 1,
+      "config": {
+        "bindings": {
+          "pclk": "20",
+          "data": "13",
+          "datak": "15"
+        },
+        "parameters": {
+          "scrambling": "auto",
+          "sample_point": "before_edge"
+        }
+      }
+    },
+    {
+      "decoderId": "ferrite.pcie_dll_w16",
+      "instanceNumber": 2,
+      "config": {
+        "bindings": {
+          "pclk": "20",
+          "data": "192",
+          "datak": "193"
+        },
+        "parameters": {
+          "scrambling": "auto",
+          "sample_point": "before_edge"
+        }
+      }
+    },
+    {
+      "decoderId": "ferrite.pcie_pipe_w16",
+      "instanceNumber": 1,
+      "config": {
+        "bindings": {
+          "pclk": "20",
+          "data": "13",
+          "datak": "15"
+        },
+        "parameters": {
+          "scrambling": "auto",
+          "sample_point": "before_edge",
+          "coalesce": true,
+          "show_idle": false
+        }
+      }
+    },
+    {
+      "decoderId": "ferrite.pcie_pipe_w16",
+      "instanceNumber": 2,
+      "config": {
+        "bindings": {
+          "pclk": "20",
+          "data": "192",
+          "datak": "193"
+        },
+        "parameters": {
+          "scrambling": "auto",
+          "sample_point": "before_edge",
+          "coalesce": true,
+          "show_idle": false
+        }
+      }
+    },
+    {
+      "decoderId": "openpcie.pcie_tlp_down",
+      "instanceNumber": 1,
+      "config": {
+        "bindings": {
+          "clk": "203",
+          "tlp_data": "208",
+          "tlp_sop": "209",
+          "tlp_eop": "210",
+          "tlp_valid": "211",
+          "peer_data": "212",
+          "peer_sop": "213",
+          "peer_eop": "214",
+          "peer_valid": "215"
+        },
+        "parameters": {
+          "span": "until_next"
+        }
+      }
+    },
+    {
+      "decoderId": "openpcie.pcie_tlp_up",
+      "instanceNumber": 1,
+      "config": {
+        "bindings": {
+          "clk": "203",
+          "tlp_data": "212",
+          "tlp_sop": "213",
+          "tlp_eop": "214",
+          "tlp_valid": "215",
+          "peer_data": "208",
+          "peer_sop": "209",
+          "peer_eop": "210",
+          "peer_valid": "211"
+        },
+        "parameters": {
+          "span": "until_next"
+        }
+      }
+    }
+  ]
+}
