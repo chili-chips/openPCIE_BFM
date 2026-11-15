@@ -7,7 +7,7 @@
 *.vh    linguist-language=SystemVerilog
 
 # upstream copies: kept out of the language stats
-vip/**  linguist-vendored
+1.upstream/vip/**  linguist-vendored
 
 # LF in the working copy too, whatever core.autocrlf says
 *.sv      text eol=lf

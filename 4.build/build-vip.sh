@@ -3,34 +3,34 @@
 #
 # SPDX-License-Identifier: BSD-3-Clause
 #
-# Build the co-simulation VIP from the upstream copies in vip/: VProc,
+# Build the co-simulation VIP from the upstream copies in 1.upstream/vip/: VProc,
 # the pcieVHost PCIE model and mem_model (github.com/wyvernSemi, versions in
-# vip/README.md). Builds the DPI-C (Verilator, XSIM, JanusHDL) and VPI (Icarus)
+# 1.upstream/vip/README.md). Builds the DPI-C (Verilator, XSIM, JanusHDL) and VPI (Icarus)
 # libraries, collects the headers and HDL, applies the local changes this
 # test bench needs, and prints the directory, for the make file:
 #
-#   VIP_DIR=$(bash tools/build-vip.sh)
+#   VIP_DIR=$(bash 4.build/build-vip.sh)
 #
 #   $VIP_DIR/lib        libcosimlnx.a (VProc), libpcielnx.a (pcieVHost)
 #   $VIP_DIR/include    their C/C++ headers, ltssm.h
 #   $VIP_DIR/hdl        f_VProc.sv, f_mem_model.sv, pcieVHost*.sv, clkmux.sv,
 #                       Serialiser.sv; headers/ (.svh) for the include path
 #
-# Our changes to upstream are in vip/ (tools/vip-import.sh), but for
-# patches/pcievhost-speed.patch and patches/vproc-coroutine.patch: VIP_PATCH and VPROC_PATCH below.
+# Our changes to upstream are in 1.upstream/vip/ (4.build/vip-import.sh), but for
+# 1.upstream/patches/pcievhost-speed.patch and 1.upstream/patches/vproc-coroutine.patch: VIP_PATCH and VPROC_PATCH below.
 #
 # VIP_BUILD (default ~/.cache/openPCIE_BFM/vip) is the output; it is
-# rebuilt when a file in vip/ or this script is newer, or VIP_PATCH has
+# rebuilt when a file in 1.upstream/vip/ or this script is newer, or VIP_PATCH has
 # changed. Needs gcc, ar, and patch for VIP_PATCH.
 #
 # VIP_PATCH: a patch on the pcieVHost C sources, core, PIPE wrapper, serialiser
 # and headers (-p1, a/src/..., a/verilog/..., upstream's .v names: mapped to
-# our .sv and .svh), applied to a copy before the build: patches/pcievhost-speed.patch for the Artix-7 RC
+# our .sv and .svh), applied to a copy before the build: 1.upstream/patches/pcievhost-speed.patch for the Artix-7 RC
 # model (the make file passes it). ltssm.c is not in the libraries:
-# the make file compiles ltssm/ltssm.c with the user code.
+# the make file compiles 3.sw/ltssm/ltssm.c with the user code.
 set -euo pipefail
 HERE=$(cd "$(dirname "$0")" && pwd)
-SRC=$(cd "$HERE/../vip" && pwd)
+SRC=$(cd "$HERE/../1.upstream/vip" && pwd)
 OUT=${VIP_BUILD:-$HOME/.cache/openPCIE_BFM/vip}
 VIP_PATCH=${VIP_PATCH:-}
 VPROC_PATCH=${VPROC_PATCH:-}

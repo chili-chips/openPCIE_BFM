@@ -4,27 +4,27 @@
 # SPDX-License-Identifier: BSD-3-Clause
 #
 # Import the co-simulation VIP from upstream (github.com/wyvernSemi) into
-# vip/, with our changes applied. Run it only to upgrade a model: set
+# 1.upstream/vip/, with our changes applied. Run it only to upgrade a model: set
 # the pins below, run, then run the self-test on every simulator and update
-# vip/README.md.
+# 1.upstream/vip/README.md.
 #
-#   bash tools/vip-import.sh
+#   bash 4.build/vip-import.sh
 #
 # Copies only the files the build uses, with LF line endings, then applies:
 #   - pcieVHost.v: VProc's BE and Burst ports, left open (we build VProc with
 #     VPROC_BYTE_ENABLE)
 #   - test_defs.v: `fatal calls tb.Fatal, our test bench top
 #   - pcieVHost: transaction taps, TLP and DLLP ports
-#     (patches/pcievhost-taps.patch)
+#     (1.upstream/patches/pcievhost-taps.patch)
 #   - pcie_vhost_map.v: generated from pcie_vhost_map.h, as upstream's make
 #     files do
 #   - SystemVerilog names, after the patches (they name upstream's files):
 #     modules .sv, `include headers .svh, the `include lines to match
 #   - READMEs: <p align="center"> blocks become <div align="center">
 # pcieVHost's src/ltssm.c is not copied: the make file compiles ours,
-# ltssm/ltssm.c, with its LTSSM patch (ltssm/README.md).
-# patches/pcievhost-speed.patch and patches/vproc-coroutine.patch are applied
-# at build time (tools/build-vip.sh, VIP_PATCH and VPROC_PATCH).
+# 3.sw/ltssm/ltssm.c, with its LTSSM patch (3.sw/ltssm/README.md).
+# 1.upstream/patches/pcievhost-speed.patch and 1.upstream/patches/vproc-coroutine.patch are applied
+# at build time (4.build/build-vip.sh, VIP_PATCH and VPROC_PATCH).
 #
 # DEPS_WORK (default ~/.cache/openPCIE_BFM-deps) holds the upstream
 # clones. Needs git, patch, sed.
@@ -33,7 +33,7 @@ VPROC_REF=${VPROC_REF:-VERSION_1_13_4}
 PCIEVHOST_REF=${PCIEVHOST_REF:-VESRSION_1_9_3}   # sic: upstream's tag name
 MEM_MODEL_REF=${MEM_MODEL_REF:-c7b9c62}
 HERE=$(cd "$(dirname "$0")" && pwd)
-D=$(cd "$HERE/.." && pwd)/vip
+D=$(cd "$HERE/.." && pwd)/1.upstream/vip
 U=${DEPS_WORK:-$HOME/.cache/openPCIE_BFM-deps}
 mkdir -p "$U"
 
@@ -63,7 +63,7 @@ done
 # ---- pcieVHost ----------------------------------------------------------------
 P=$D/pcievhost
 for f in "$U"/pcievhost/src/*.c "$U"/pcievhost/src/*.h; do
-  [ "$(basename "$f")" = ltssm.c ] && continue   # the make file compiles ltssm/ltssm.c
+  [ "$(basename "$f")" = ltssm.c ] && continue   # the make file compiles 3.sw/ltssm/ltssm.c
   cp_lf "$f" "$P/src/$(basename "$f")"
 done
 for f in allheaders.v pciedispheader.v pciexpress_header.v timescale.v; do
@@ -91,8 +91,8 @@ sed -i -E '/^\s*\.RD\s*\(RD\),$/a\
            .BurstLast      (),\
 `endif' "$F"
 
-# change: transaction taps, TLP and DLLP ports (doc/pcievhost/README.md)
-patch -s --no-backup-if-mismatch -p1 -d "$P" < "$HERE/../patches/pcievhost-taps.patch"
+# change: transaction taps, TLP and DLLP ports (0.doc/pcievhost/README.md)
+patch -s --no-backup-if-mismatch -p1 -d "$P" < "$HERE/../1.upstream/patches/pcievhost-taps.patch"
 
 # change: the register map, generated from the C header
 sed "s/0x/32'h/;s/#/\`/;s/DEFINES/AUTO GENERATED. DO NOT EDIT!/;" "$P/src/pcie_vhost_map.h" \
@@ -121,7 +121,7 @@ sed -i -e '/<p align="center">/,/<\/p>/{s#<p align="center">#<div align="center"
   "$D"/{vproc,pcievhost,mem_model}/README.md
 
 echo "imported: VProc $VPROC_REF, pcieVHost $PCIEVHOST_REF, mem_model $MEM_MODEL_REF"
-echo "next: update vip/README.md, then run the self-test on every simulator"
+echo "next: update 1.upstream/vip/README.md, then run the self-test on every simulator"
 
 # -----------------------------------------------------------------------------
 # Project:     openPCIE_BFM

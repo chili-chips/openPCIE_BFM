@@ -39,7 +39,7 @@ Details: the [_pcievhost_ manual](https://github.com/wyvernSemi/pcievhost/blob/m
 
 ## The HDL component
 
-`pcieVHost.sv` (in `verilog/pcieVHost`) is the model. `pcieVHostPipex1.sv`, in the same directory, wraps it as one link port of PIPE TX and RX data. Our `pcieVHostPipexN.sv` (in `hdl/`) does the same for any number of lanes.
+`pcieVHost.sv` (in `verilog/pcieVHost`) is the model. `pcieVHostPipex1.sv`, in the same directory, wraps it as one link port of PIPE TX and RX data. Our `pcieVHostPipexN.sv` (in `2.rtl/`) does the same for any number of lanes.
 
 <div align=center>
 <img width=800 src="images/pcievhost_module.png">
@@ -65,7 +65,7 @@ One rule: the line never carries X or Z, on any simulator. Electrical idle is a 
 
 | On | Value | Means |
 |---|---|---|
-| PIPE (`pcieVHostPipex1.sv`, `pcieVHostPipexN.sv`) | `` `NOSIG `` with the K flag, per symbol | electrical idle, both ways. `0xFF` with K has no 8b/10b code, so PCIe never sends it (4.2.1). Defined with the K codes in `pciexpress_header.svh` (our patch); our models take it from `hdl/pipe_sym_pkg.sv`, and `pcieVHostPipexN.sv` checks that the two agree |
+| PIPE (`pcieVHostPipex1.sv`, `pcieVHostPipexN.sv`) | `` `NOSIG `` with the K flag, per symbol | electrical idle, both ways. `0xFF` with K has no 8b/10b code, so PCIe never sends it (4.2.1). Defined with the K codes in `pciexpress_header.svh` (our patch); our models take it from `2.rtl/pipe_sym_pkg.sv`, and `pcieVHostPipexN.sv` checks that the two agree |
 | serial (`pcieVHost.sv`, `Serialiser.sv`) | constant 0 | electrical idle |
 | | a symbol of ten equal bits | idle seen: symbol sync dropped, and the core told the partner is idle. No 8b/10b symbol runs past five bits; a symbol of 1s is idle too, as with the lane's polarity inverted |
 | | K28.5 (`` `PCOMMA ``, `` `NCOMMA ``) | symbol sync; the symbol count restarts there (issue 49) |

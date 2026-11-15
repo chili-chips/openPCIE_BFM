@@ -9,23 +9,31 @@
 # Run FROM THIS FOLDER, on Linux or WSL:
 #   make [SIM=...] run     build and run; exit 0 on RC MODEL RESULT: PASS
 #   make all-sims          run on every simulator, one line each
-#   make clean
+#   make regress           the tester over seeds 1 to SEEDS
+#   make sanity            the sanity list (run-sanity.sh), a few minutes
+#   make regression        the regression list (run-regression.sh)
+#   make clean             removes work/
+#
+# Everything a build or run makes goes to work/: work/<SIM>/<config>/ (the
+# build, run.log), work/regress/<config>/<seed>/, work/logs/.
 #
 # SIM    verilator (default), icarus, xsim (Vivado), janushdl (jhdl)
 # LANES  1 (default) or 4
 # GEN    the fastest rate both sides advertise: 1 or 2 (default 2 at x1, 1 at x4)
 # PHY    none (default): the models meet at the PIPE; core: the RC model is
-#        the MAC (hdl/pipe_mac_adapter.sv) of a PIPE PHY (hdl/pipe_phy_core.sv)
+#        the MAC (2.rtl/pipe_mac_adapter.sv) of a PIPE PHY (2.rtl/pipe_phy_core.sv)
 # A7RC   0 (default): the RC model is a tester; 1: literal, only what the lab
 #        RC sends
 # WRAP   n (default): both nodes in PIPExN__pcieVHost; x1: RCPIPEx1__pcieVHost
 #        and PIPEx1__pcieVHost (x1, Gen1 only)
 # SEED   the tester's random stimulus (default 1), read at run time
 # RUN_US time limit in us (default 2000)
+# SEEDS  make regress: seeds 1 to SEEDS (default 10), REGRESS_JOBS at a time
+#        (default 4), by ../4.build/regress.sh; Verilator or Icarus
 #
-# The VIP (VProc, pcieVHost, mem_model) is built once by ../tools/build-vip.sh
-# into ~/.cache/openPCIE_BFM/vip, with patches/pcievhost-speed.patch and
-# patches/vproc-coroutine.patch.
+# The VIP (VProc, pcieVHost, mem_model) is built once by ../4.build/build-vip.sh
+# into ~/.cache/openPCIE_BFM/vip, with 1.upstream/patches/pcievhost-speed.patch and
+# 1.upstream/patches/vproc-coroutine.patch.
 # =============================================================================
 
 SIM    ?= verilator
@@ -62,8 +70,16 @@ ifeq ($(filter 0 1,$(A7RC)),)
   $(error A7RC must be 0 or 1 (got "$(A7RC)"))
 endif
 
+SEEDS         ?= 10
+REGRESS_JOBS  ?= 4
+REGRESS_S     ?= 300
+REGRESS_TRIES ?= 2
+REGRESS_QUIET ?= 1
+
 BFM        := $(abspath $(CURDIR)/..)
-OBJDIR      = $(CURDIR)/obj/$(SIM).$(WRAP).x$(LANES)g$(GEN).$(PHY)$(if $(filter 1,$(A7RC)),.a7rc)
+WORK       := $(CURDIR)/work
+CFG         = $(WRAP).x$(LANES)g$(GEN).$(PHY)$(if $(filter 1,$(A7RC)),.a7rc)
+OBJDIR      = $(WORK)/$(SIM)/$(CFG)
 
 # ---- tools --------------------------------------------------------------------
 HOST_CC    ?= gcc
@@ -79,18 +95,18 @@ XELAB      ?= $(XILINX_VIVADO)/bin/xelab
 XSIM       ?= $(XILINX_VIVADO)/bin/xsim
 
 # ---- the VIP ------------------------------------------------------------------
-VIP_ENV     = VIP_PATCH=$(BFM)/patches/pcievhost-speed.patch \
-              VPROC_PATCH=$(BFM)/patches/vproc-coroutine.patch
-VIP_DIR    ?= $(shell $(VIP_ENV) bash $(BFM)/tools/build-vip.sh)
+VIP_ENV     = VIP_PATCH=$(BFM)/1.upstream/patches/pcievhost-speed.patch \
+              VPROC_PATCH=$(BFM)/1.upstream/patches/vproc-coroutine.patch
+VIP_DIR    ?= $(shell $(VIP_ENV) bash $(BFM)/4.build/build-vip.sh)
 export VIP_DIR
 
 # ---- C/C++: the two programs, the checker, the LTSSM helper -------------------
 #   usercode/VUserMain1.cpp  the endpoint (node 1)
-#   a7rc/VUserMain2.cpp      the Artix-7 RC model (node 2), a7rc/a7rc_check.cpp
-#   ltssm/ltssm.c            link training, for both
+#   3.sw/a7rc/VUserMain2.cpp      the Artix-7 RC model (node 2), 3.sw/a7rc/a7rc_check.cpp
+#   3.sw/ltssm/ltssm.c            link training, for both
 OPTFLAG    ?= -O2 -g
 CPPSTD      = -std=c++20
-INCLPATHS   = -I$(CURDIR)/usercode -I$(BFM)/a7rc -I$(VIP_DIR)/include
+INCLPATHS   = -I$(CURDIR)/usercode -I$(BFM)/3.sw/a7rc -I$(VIP_DIR)/include
 DEFS        = -DVPROC -DEXCLUDE_LTSSM -DEP_GEN=$(GEN) -DRC_GEN=$(GEN) -DA7RC_LITERAL=$(A7RC) \
               -DLANE_REV_EP=1 -DLANE_REV_RC=0
 ifeq ($(SIM),icarus)
@@ -100,14 +116,14 @@ ifeq ($(SIM),icarus)
 else
   DEFS     += -DVPROC_SV
 endif
-USER_SRC    = $(CURDIR)/usercode/VUserMain1.cpp $(BFM)/a7rc/VUserMain2.cpp $(BFM)/a7rc/a7rc_check.cpp \
-              $(BFM)/ltssm/ltssm.c
+USER_SRC    = $(CURDIR)/usercode/VUserMain1.cpp $(BFM)/3.sw/a7rc/VUserMain2.cpp $(BFM)/3.sw/a7rc/a7rc_check.cpp \
+              $(BFM)/3.sw/ltssm/ltssm.c
 VOBJS       = $(addprefix $(OBJDIR)/,$(patsubst %.cpp,%.o,$(patsubst %.c,%.o,$(notdir $(USER_SRC)))))
 USERLIB     = $(OBJDIR)/libuser.a
 
 # ---- HDL ----------------------------------------------------------------------
 # The models' sources in compile order. Verilator and XSIM read every file of
-# hdl/ (but mem_model.sv: nothing here instantiates it), so the self-test
+# 2.rtl/ (but mem_model.sv: nothing here instantiates it), so the self-test
 # also compiles what it does not run. Icarus 14 and JanusHDL 0.17 get only
 # what this run uses: neither parses pipe_mac_adapter.sv's assertions, and
 # Icarus not PIPExN__pcieVHost.sv (an automatic variable in an always block)
@@ -121,17 +137,17 @@ HDL_SRC     = $(VIP_DIR)/hdl/headers/allheaders.svh \
               $(VIP_DIR)/hdl/Serialiser.sv \
               $(VIP_DIR)/hdl/pcieVHost.sv \
               $(VIP_DIR)/hdl/pcieVHostPipex1.sv \
-              $(BFM)/hdl/pipe_sym_pkg.sv \
-              $(if $(USE_XN),$(BFM)/hdl/pcieVHostPipexN.sv $(BFM)/hdl/PIPExN__pcieVHost.sv) \
-              $(if $(USE_X1),$(BFM)/hdl/PIPEx1__pcieVHost.sv $(BFM)/hdl/RCPIPEx1__pcieVHost.sv) \
-              $(if $(or $(HDL_ALL),$(filter core,$(PHY))),$(BFM)/hdl/pipe_phy_core.sv $(BFM)/hdl/pipe_mac_adapter.sv) \
-              $(if $(HDL_ALL),$(BFM)/hdl/pipe_x4_view.sv) \
+              $(BFM)/2.rtl/pipe_sym_pkg.sv \
+              $(if $(USE_XN),$(BFM)/2.rtl/pcieVHostPipexN.sv $(BFM)/2.rtl/PIPExN__pcieVHost.sv) \
+              $(if $(USE_X1),$(BFM)/2.rtl/PIPEx1__pcieVHost.sv $(BFM)/2.rtl/RCPIPEx1__pcieVHost.sv) \
+              $(if $(or $(HDL_ALL),$(filter core,$(PHY))),$(BFM)/2.rtl/pipe_phy_core.sv $(BFM)/2.rtl/pipe_mac_adapter.sv) \
+              $(if $(HDL_ALL),$(BFM)/2.rtl/pipe_x4_view.sv) \
               $(CURDIR)/tb.sv
 HDL_DEFS    = VPROC_BYTE_ENABLE SIM_LANES=$(LANES) RUN_US=$(RUN_US) $(if $(filter core,$(PHY)),SIM_PIPE_PHY) \
               $(if $(filter x1,$(WRAP)),SIM_PIPEX1) $(if $(filter-out icarus,$(SIM)),VPROC_SV)
 
 # =============================================================================
-.PHONY: all run all-sims clean help FORCE
+.PHONY: all run all-sims regress sanity regression clean help FORCE
 .DEFAULT_GOAL := all
 
 $(OBJDIR):
@@ -140,10 +156,10 @@ $(OBJDIR):
 $(OBJDIR)/%.o: $(CURDIR)/usercode/%.cpp | $(OBJDIR)
 	@$(HOST_CXX) -c -fPIC -MMD -MP $(OPTFLAG) $(CPPSTD) -Wno-write-strings $(DEFS) $(INCLPATHS) $< -o $@
 
-$(OBJDIR)/%.o: $(BFM)/a7rc/%.cpp | $(OBJDIR)
+$(OBJDIR)/%.o: $(BFM)/3.sw/a7rc/%.cpp | $(OBJDIR)
 	@$(HOST_CXX) -c -fPIC -MMD -MP $(OPTFLAG) $(CPPSTD) -Wno-write-strings $(DEFS) $(INCLPATHS) $< -o $@
 
-$(OBJDIR)/%.o: $(BFM)/ltssm/%.c | $(OBJDIR)
+$(OBJDIR)/%.o: $(BFM)/3.sw/ltssm/%.c | $(OBJDIR)
 	@$(HOST_CC) -c -fPIC -MMD -MP $(OPTFLAG) $(DEFS) $(INCLPATHS) $< -o $@
 
 $(USERLIB): $(VOBJS)
@@ -215,17 +231,29 @@ run: all
 
 # Every simulator in turn, one line each: result and wall time
 all-sims:
-	@mkdir -p obj; for s in verilator icarus xsim janushdl; do \
+	@mkdir -p $(WORK)/logs; for s in verilator icarus xsim janushdl; do \
 	    t0=$$(date +%s); \
-	    if $(MAKE) --no-print-directory SIM=$$s run > obj/$$s.make.log 2>&1; then r=PASS; else r=FAIL; fi; \
-	    echo "$$s: $$r, $$(( $$(date +%s) - t0 )) s (obj/$$s.make.log)"; \
+	    if $(MAKE) --no-print-directory SIM=$$s run > $(WORK)/logs/$$s.make.log 2>&1; then r=PASS; else r=FAIL; fi; \
+	    echo "$$s: $$r, $$(( $$(date +%s) - t0 )) s (work/logs/$$s.make.log)"; \
 	done
+
+# The tester over seeds 1 to SEEDS, each in work/regress/<config>/<seed>/
+regress: all
+	@[ -n "$(filter verilator icarus,$(SIM))" ] || { echo "make regress: SIM=verilator or icarus"; exit 1; }
+	@bash $(BFM)/4.build/regress.sh $(SEEDS) $(REGRESS_JOBS) $(REGRESS_S) $(REGRESS_TRIES) $(REGRESS_QUIET) \
+	    $(WORK)/regress/$(SIM).$(CFG) "" -- $(SIM_CMD)
+
+sanity:
+	@bash run-sanity.sh
+
+regression:
+	@bash run-regression.sh
 
 help:
 	@sed -n '/^# openPCIE_BFM/,/^# ====/p' Makefile
 
 clean:
-	@rm -rf $(CURDIR)/obj
+	@rm -rf $(WORK)
 
 # -----------------------------------------------------------------------------
 # Project:     openPCIE_BFM

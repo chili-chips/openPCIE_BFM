@@ -7,21 +7,13 @@
 *.bak
 *.swp
 
-# Build and run outputs (make in selftest/)
-obj/
-*.o
-*.d
-*.a
-*.so
-*.vpi
-*.log
-*.jou
-*.pb
-*.wdb
-xsim.dir/
-.Xil/
+# Build and run outputs: all of them in 5.sim-regression/work/
+work/
 
 # Waveforms
 *.vcd
 *.fst
-*.vvp
+
+# draw.io auto-backups
+*.bkp
+.$*

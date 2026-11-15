@@ -15,7 +15,7 @@
 //   its project package: the width comes from `SIM_LANES.
 //
 //        u_rc  PIPExN__pcieVHost, EndPoint = 0   <-- the Artix-7 RC model,
-//          |   PIPE                                  node 2 (a7rc/)
+//          |   PIPE                                  node 2 (3.sw/a7rc/)
 //        u_ep  PIPExN__pcieVHost, EndPoint = 1   <-- the endpoint model,
 //                                                    node 1 (usercode/)
 //
@@ -172,14 +172,14 @@ module tb;
   // make WRAP=x1: the x1 Gen1 wrappers, RCPIPEx1__pcieVHost and
   // PIPEx1__pcieVHost (no gen2 input, no Gen2ClkSel: the rate stays Gen1)
   RCPIPEx1__pcieVHost #(
-      .NodeNum   (2),  // a7rc/VUserMain2.cpp: the Artix-7 RC model
+      .NodeNum   (2),  // 3.sw/a7rc/VUserMain2.cpp: the Artix-7 RC model
       .DataWidth (16)
   ) u_rc (
       .pclk               (pclk),
       .nreset             (nreset),
 `else
   PIPExN__pcieVHost #(
-      .NodeNum   (2),  // a7rc/VUserMain2.cpp: the Artix-7 RC model
+      .NodeNum   (2),  // 3.sw/a7rc/VUserMain2.cpp: the Artix-7 RC model
       .EndPoint  (0),
       .Lanes     (L),
       .DataWidth (16)
