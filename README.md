@@ -17,7 +17,9 @@
   <img alt="openPCIE_BFM logo" width="25%" src="0.doc/artwork/openPCIE_BFM.hex.png">
 </div>
 
-A PCIE simulation model (bus functional model) for PIPE-based PCIE designs, built on **Simon Southwell's [pcieVHost](https://github.com/wyvernSemi/pcievhost) and [VProc](https://github.com/wyvernSemi/vproc)**. One model plays the Root Complex or the Endpoint, x1 or x4, Gen1 or Gen2, at the PIPE or on the serial line.
+A PCIE simulation model (bus functional model) for PIPE-based PCIE designs, built on **Simon Southwell's [pcieVHost](https://github.com/wyvernSemi/pcievhost) and [VProc](https://github.com/wyvernSemi/vproc)**. One model plays the Root Complex or the Endpoint, x1 or x4, Gen1 or Gen2, at the PIPE or on the serial line. Above the PIPE, it gives access to the Data Link and Transaction layers: taps that show every DLLP and TLP to waveform decoders and checkers, and a C API that sends and checks transactions.
+
+**Cross-checked with the [WaveCrux](https://wavecrux.app) Protocol Decoders.** Ferrite's PIPE and Data Link Layer decoders and the openPCIE TLP decoder read the same link in the waveform. Model and decoders were brought up against each other: each one checks the other. To our knowledge, this makes it the first open-source PCIE transaction generator and protocol checker that is calibrated against a hard PCIE macro and cross-checked by independent protocol decoders.
 
 It is shared by [openPCIE](https://github.com/chili-chips/openPCIE) (Artix-7 Root Complex) and [openCologne-PCIE](https://github.com/chili-chips/openCologne-PCIE) (GateMate Endpoint), as a git submodule of both.
 
@@ -123,10 +125,18 @@ Two licenses, side by side, per file (`REUSE.toml`, `LICENSES/`; `reuse lint` pa
   <a href="https://github.com/wyvernSemi"><img width="15%" alt="wyvernSemi logo" src="0.doc/artwork/wyvernSemi-logo-rounded.png"></a>
 </div>
 
+**WaveCrux, by Ferrite Engineering, is our second pair of eyes.** Its PIPE and Data Link Layer protocol decoders read every link this model drives, independently of it; model and decoders were brought up against each other, so each one checks the other. They fixed the decoder timing in WaveCrux 1.0.1 on our report, wrote the PIPE, Data Link Layer and serial-line decoders for openPCIE and openCologne-PCIE, and host our TLP decoder in [wavecrux-decoders](https://github.com/Ferrite-Engineering/wavecrux-decoders). Thank you, Ferrite!
+
+<div align="center">
+  <a href="https://wavecrux.app"><img width="15%" alt="WaveCrux logo" src="0.doc/artwork/WaveCrux.logo.png"></a>
+</div>
+
 The PIPE adapters and the Artix-7 RC model are by Chili.CHIPS; this repository is volunteer work. They were proven in the test and validation jigs of our two PCIE projects, both sponsored by [NLnet](https://nlnet.nl):
 
 - [openPCIE](https://github.com/chili-chips/openPCIE): the RC model against the AMD `PCIE_2_1` hard macro, at x1 and x4, Gen1 and Gen2.
 - [openCologne-PCIE](https://github.com/chili-chips/openCologne-PCIE): the RC model against an open-source GateMate Endpoint, at the PIPE and on the serial line.
+
+The RC model is calibrated against the AMD (Xilinx) 7 Series `PCIE_2_1` hard macro and its user guide, [UG477](https://docs.xilinx.com/v/u/en-US/ug477_7Series_IntBlock_PCIe): its link training, timing and request behaviour were measured on the hard macro and modelled after it.
 
 #### References
 
@@ -135,6 +145,8 @@ The PIPE adapters and the Artix-7 RC model are by Chili.CHIPS; this repository i
 - [mem_model](https://github.com/wyvernSemi/mem_model), Simon Southwell: the sparse memory model
 - [PCI Express Primer](http://www.anita-simulators.org.uk/wyvernsemi/articles/pci_express.pdf), Simon Southwell
 - [openPCIE](https://github.com/chili-chips/openPCIE) and [openCologne-PCIE](https://github.com/chili-chips/openCologne-PCIE): the projects this model came from
+- [WaveCrux](https://wavecrux.app) and [wavecrux-decoders](https://github.com/Ferrite-Engineering/wavecrux-decoders), Ferrite Engineering: the waveform viewer and the PCIE protocol decoders we cross-check with
+- [cocotbext-pcie](https://github.com/alexforencich/cocotbext-pcie), Alex Forencich: a PCIE transaction-level model for cocotb (Python), related work
 
 ---
 ---
