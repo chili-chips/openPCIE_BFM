@@ -48,7 +48,7 @@ This VIP is used within [openPCIE](https://github.com/chili-chips/openPCIE) (Art
 |---|---|
 | Role | Root Complex or Endpoint |
 | Link | x1 or x4; Gen1 (2.5 GT/s) or Gen2 (5 GT/s) |
-| Attach to | another model on the line, an RTL MAC (PHY side of PIPE) or a PIPE PHY (MAC side of PIPE): [three ways](0.doc/integration.md#three-ways-to-attach-pcievhost) |
+| Attach to | another model on the line, an RTL MAC (PHY side of PIPE) or a PIPE PHY (MAC side of PIPE): [three ways](2.rtl/README.md#three-ways-to-attach-pcievhost) |
 | Simulators | Verilator, Vivado XSIM, JanusHDL (DPI-C); Icarus (VPI, x1 wrappers) |
 | FPGAs | AMD Artix-7 (openPCIE), Cologne Chip GateMate (openCologne-PCIE) |
 
@@ -64,7 +64,7 @@ What it adds to the upstream _pcieVHost_:
 > pcieVHost set up as the AMD `PCIE_2_1` root port, calibrated against the hard macro. It trains the link, runs the RC firmware's requests and checks the Endpoint against 59 rules of the PCIE spec.
 
 #### Fixes and new features
-> Gen2 speed change through Recovery, lane reversal and polarity, one electrical-idle rule with no X or Z, transaction taps, fault injection, co-routines in VProc (about 22 times faster), no `#` delays on register outputs (Verilator 2 to 3 times faster; [timescale and delays](0.doc/integration.md#timescale)). Details: [what we added or removed](0.doc/model-changes.md#pcievhost-what-we-added-or-removed), [the issues we fixed](0.doc/model-changes.md#simulation-issues).
+> Gen2 speed change through Recovery, lane reversal and polarity, one electrical-idle rule with no X or Z, transaction taps, fault injection, co-routines in VProc (about 22 times faster), no `#` delays on register outputs (Verilator 2 to 3 times faster; [timescale and delays](2.rtl/README.md#timescale)). Details: [what we added or removed](1.upstream/README.md#pcievhost-what-we-added-or-removed), [the issues we fixed](1.upstream/README.md#simulation-issues).
 
 #### PIPE adapters
 > Our wrappers put the model on a PIPE link (x1 or x4), offer the link at the PIPE, Data Link and Transaction layers for waveform decoders, and act as the MAC or the PHY side of a PIPE with its handshakes.
@@ -82,10 +82,10 @@ Its C side: user code calls the API; the send and receive paths run through VPro
   <img alt="The pcieVHost C model: user code calls the API; the send path goes through the send queue, SendPacket and codec.c to VProc and pcieVHost.sv; the receive path through ExtractPhyInput to ProcessInput and ProcessOs; mem.c and displink.c; our patches and tap ports" width="100%" src="0.doc/images/pcievhost-architecture.drawio.png">
 </div>
 
-The API, configuration, display and limits: [pcieVHost summary](0.doc/pcievhost/README.md).
+The API, configuration, display and limits: [pcieVHost summary](1.upstream/pcievhost-guide/README.md).
 
 ### Integration
-How the model attaches to a design, what it exposes, how to build it: [integration notes](0.doc/integration.md).
+How the model attaches to a design, what it exposes, how to build it: [integration notes](2.rtl/README.md).
 
 **Transaction taps:** each node reports every TLP and DLLP it sends and receives, one per clock, under the names the WaveCrux decoders bind to:
 
@@ -104,15 +104,16 @@ How the model attaches to a design, what it exposes, how to build it: [integrati
 
 | Path | What | License |
 |---|---|---|
-| `2.rtl/` | our SystemVerilog: `PIPExN__pcieVHost.sv` (x1/x4, Gen1/Gen2), `pcieVHostPipexN.sv` (our PIPE wrapper for N lanes, derived from upstream's `pcieVHostPipex1`), `PIPEx1__pcieVHost.sv` and `RCPIPEx1__pcieVHost.sv` (x1 Gen1), `pipe_mac_adapter.sv` (MAC side of PIPE), `pipe_phy_core.sv` (PHY side of PIPE), `pipe_sym_pkg.sv`, `pipe_x4_view.sv`, `mem_model.sv` | BSD-3-Clause; `pcieVHostPipexN.sv`, `mem_model.sv` GPL-3.0-or-later |
-| `3.sw/a7rc/` | the Artix-7 RC model: `VUserMain2.cpp` (VProc node 2), its checker `a7rc_check.cpp`, `ep_dma.h` | BSD-3-Clause |
+| `2.rtl/` | [integration notes](2.rtl/README.md): three ways to attach, taps, VProc and mem_model, timescale, build defines. Our SystemVerilog: `PIPExN__pcieVHost.sv` (x1/x4, Gen1/Gen2), `pcieVHostPipexN.sv` (our PIPE wrapper for N lanes, derived from upstream's `pcieVHostPipex1`), `PIPEx1__pcieVHost.sv` and `RCPIPEx1__pcieVHost.sv` (x1 Gen1), `pipe_mac_adapter.sv` (MAC side of PIPE), `pipe_phy_core.sv` (PHY side of PIPE), `pipe_sym_pkg.sv`, `pipe_x4_view.sv`, `mem_model.sv` | BSD-3-Clause; `pcieVHostPipexN.sv`, `mem_model.sv` GPL-3.0-or-later |
+| `3.sw/a7rc/` | [the Artix-7 RC model and its 59 rules](3.sw/a7rc/README.md): `VUserMain2.cpp` (VProc node 2), its checker `a7rc_check.cpp`, `ep_dma.h` | BSD-3-Clause |
 | `3.sw/ltssm/` | the LTSSM helper both nodes link in: `ltssm.c` (ours), `ltssm.c.orig` (upstream), `ltssm-openpcie.patch` | GPL-3.0-or-later |
+| `1.upstream/` | [what we changed in upstream](1.upstream/README.md), and the issues fixed | BSD-3-Clause |
 | `1.upstream/patches/` | our changes to upstream: `pcievhost-taps.patch` (applied at import), `pcievhost-speed.patch`, `vproc-coroutine.patch` (applied at build) | GPL-3.0-or-later |
 | `1.upstream/vip/` | upstream copies: VProc, pcieVHost, mem_model ([versions](1.upstream/vip/README.md)) | GPL-3.0-or-later |
 | `4.build/` | `vip-import.sh` (upstream to `1.upstream/vip/`), `build-vip.sh` (libraries and HDL), `regress.sh` (seeds), `wavecrux.py` (a run in WaveCrux at the first violation), `wavecrux-session.py` (a WaveCrux session for a dump), `lint.verible` (the lint rules) | BSD-3-Clause |
 | `5.sim-regression/` | the self-test: the RC model against the Endpoint model, back to back; sanity and regression lists | BSD-3-Clause |
-| `0.doc/pcievhost/` | how to configure and drive the model | GPL-3.0-or-later |
-| `0.doc/` | [the RC model and its 59 rules](0.doc/rc-model.md), [integration notes](0.doc/integration.md) (adapters, taps, VProc and mem_model, build defines), [changes to upstream](0.doc/model-changes.md) | BSD-3-Clause |
+| `1.upstream/pcievhost-guide/` | [how to configure and drive pcieVHost](1.upstream/pcievhost-guide/README.md) | GPL-3.0-or-later |
+| `0.doc/` | the diagrams (`images/`, draw.io masters and PNGs) and logos (`artwork/`) | BSD-3-Clause; third-party logos their owners' |
 
 ### Self-test
 
@@ -186,7 +187,7 @@ Then, as `5.sim-regression/Makefile` does:
 
 1. Build the VIP once: `VIP_DIR=$(VIP_PATCH=<bfm>/1.upstream/patches/pcievhost-speed.patch VPROC_PATCH=<bfm>/1.upstream/patches/vproc-coroutine.patch bash <bfm>/4.build/build-vip.sh)`. It prints the directory with `lib/` (DPI-C: `libcosimlnx.a`, `libpcielnx.a`; VPI: `libcosimica.a`, `libpcieica.a`), `include/` and `hdl/`.
 2. Compile your node programs with `3.sw/ltssm/ltssm.c` and, for the RC model, `3.sw/a7rc/VUserMain2.cpp` and `3.sw/a7rc/a7rc_check.cpp`. Defines: `-DVPROC -DEXCLUDE_LTSSM`, plus `-DVPROC_SV` (Verilator, XSIM, JanusHDL) or `-DICARUS`.
-3. Compile the HDL from `$VIP_DIR/hdl` and `2.rtl/`, with `+define+VPROC_BYTE_ENABLE` (and `VPROC_SV` but on Icarus). The top module must be `tb` with a task `Fatal`: pcieVHost calls `tb.Fatal`. No `` `timescale `` in the HDL: pass one on the command line ([per simulator](0.doc/integration.md#timescale)).
+3. Compile the HDL from `$VIP_DIR/hdl` and `2.rtl/`, with `+define+VPROC_BYTE_ENABLE` (and `VPROC_SV` but on Icarus). The top module must be `tb` with a task `Fatal`: pcieVHost calls `tb.Fatal`. No `` `timescale `` in the HDL: pass one on the command line ([per simulator](2.rtl/README.md#timescale)).
 4. Your project keeps its own: test benches, socket wrappers around these models, Endpoint programs, waveform views of the DUT.
 
 An Endpoint other than ours tells the RC model what to expect with `-DA7RC_EP_EXPECT='"file.h"'` (IDs and BAR sizes; see `3.sw/a7rc/VUserMain2.cpp`).
@@ -195,7 +196,7 @@ An Endpoint other than ours tells the RC model what to expect with `-DA7RC_EP_EX
 
 Two licenses, side by side, per file (`REUSE.toml`, `LICENSES/`; `reuse lint` passes):
 
-- **GPL-3.0-or-later:** pcieVHost, VProc and mem_model (`1.upstream/vip/`), our changes to them (`1.upstream/patches/`, `3.sw/ltssm/`), `2.rtl/pcieVHostPipexN.sv`, `2.rtl/mem_model.sv`, `0.doc/pcievhost/`.
+- **GPL-3.0-or-later:** pcieVHost, VProc and mem_model (`1.upstream/vip/`), our changes to them (`1.upstream/patches/`, `3.sw/ltssm/`), `2.rtl/pcieVHostPipexN.sv`, `2.rtl/mem_model.sv`, `1.upstream/pcievhost-guide/`.
 - **BSD-3-Clause:** everything else: the wrappers and adapters in `2.rtl/`, the RC model (`3.sw/a7rc/`), tools, self-test.
 
 #### Credits and Acknowledgments

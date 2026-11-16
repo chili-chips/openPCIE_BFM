@@ -21,7 +21,7 @@ SPDX-License-Identifier = "BSD-3-Clause"
 # lint wrapper 2.rtl/mem_model.sv), and the
 # pcieVHost manual's summary with its pictures.
 [[annotations]]
-path = ["1.upstream/vip/**", "1.upstream/patches/**", "3.sw/ltssm/**", "0.doc/pcievhost/**", "2.rtl/mem_model.sv"]
+path = ["1.upstream/vip/**", "1.upstream/patches/**", "3.sw/ltssm/**", "1.upstream/pcievhost-guide/**", "2.rtl/mem_model.sv"]
 precedence = "closest"
 SPDX-FileCopyrightText = "2004-2025 Simon Southwell"
 SPDX-License-Identifier = "GPL-3.0-or-later"
