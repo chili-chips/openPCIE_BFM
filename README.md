@@ -39,7 +39,7 @@ This VIP is used within [openPCIE](https://github.com/chili-chips/openPCIE) (Art
 
 <div align="center">
   <a href="https://github.com/chili-chips/openPCIE"><img width="13%" alt="openPCIE Root Complex project logo" src="0.doc/artwork/pcie2rootc.hex.png"></a>
-  <a href="https://github.com/chili-chips/openCologne-PCIE"><img width="13%" alt="openCologne-PCIE project logo" src="0.doc/artwork/openCologne-PCIE.hex.png"></a>
+  <a href="https://github.com/chili-chips/openCologne-PCIE"><img width="16%" alt="openCologne-PCIE project logo" src="0.doc/artwork/openCologne-PCIE.hex.png"></a>
 </div>
 
 ### Made for portability
@@ -52,7 +52,7 @@ This VIP is used within [openPCIE](https://github.com/chili-chips/openPCIE) (Art
 | Simulators | Verilator, Vivado XSIM, JanusHDL (DPI-C); Icarus (VPI, x1 wrappers) |
 | FPGAs | AMD Artix-7 (openPCIE), Cologne Chip GateMate (openCologne-PCIE) |
 
-#### How is it made?!
+### How is it made?!
 
 <div align="center">
   <img alt="openPCIE_BFM block diagram: two pcieVHost nodes, the Artix-7 RC model and an Endpoint, each a C program on VProc over the pcieVHost C model and its HDL wrappers, joined by a PIPE link (optionally through pipe_mac_adapter and pipe_phy_core, or on the serial line); taps of both nodes at the Transaction, Data Link and PIPE layers feed the WaveCrux decoders" width="100%" src="0.doc/images/openPCIE_BFM.block-diagram.drawio.png">
@@ -60,14 +60,45 @@ This VIP is used within [openPCIE](https://github.com/chili-chips/openPCIE) (Art
 
 What it adds to the upstream _pcieVHost_:
 
-##### The Artix-7 RC model
+#### The Artix-7 RC model
 > pcieVHost set up as the AMD `PCIE_2_1` root port, calibrated against the hard macro. It trains the link, runs the RC firmware's requests and checks the Endpoint against 59 rules of the PCIE spec.
 
-##### Fixes and new features
+#### Fixes and new features
 > Gen2 speed change through Recovery, lane reversal and polarity, one electrical-idle rule with no X or Z, transaction taps, fault injection, co-routines in VProc (about 22 times faster), no `#` delays on register outputs (Verilator 2 to 3 times faster; [timescale and delays](0.doc/integration.md#timescale)). Details: [what we added or removed](0.doc/model-changes.md#pcievhost-what-we-added-or-removed), [the issues we fixed](0.doc/model-changes.md#simulation-issues).
 
-##### PIPE adapters
+#### PIPE adapters
 > Our wrappers put the model on a PIPE link (x1 or x4), offer the link at the PIPE, Data Link and Transaction layers for waveform decoders, and act as the MAC or the PHY side of a PIPE with its handshakes.
+
+### pcieVHost
+A PCIE C model on a VProc virtual processor, driving the lanes of a link. Its HDL side, wrapped for a PIPE link of N lanes:
+
+<div align="center">
+  <img alt="PIPExN__pcieVHost: PcieVhost and the PIPE-to-symbol logic inside pcieVHostPipexN, its clocks, and the layer views from the taps" width="100%" src="0.doc/images/pcievhost-pipe-wrapper.drawio.png">
+</div>
+
+Its C side: user code calls the API; the send and receive paths run through VProc to `pcieVHost.sv`:
+
+<div align="center">
+  <img alt="The pcieVHost C model: user code calls the API; the send path goes through the send queue, SendPacket and codec.c to VProc and pcieVHost.sv; the receive path through ExtractPhyInput to ProcessInput and ProcessOs; mem.c and displink.c; our patches and tap ports" width="100%" src="0.doc/images/pcievhost-architecture.drawio.png">
+</div>
+
+The API, configuration, display and limits: [pcieVHost summary](0.doc/pcievhost/README.md).
+
+### Integration
+How the model attaches to a design, what it exposes, how to build it: [integration notes](0.doc/integration.md).
+
+**Transaction taps:** each node reports every TLP and DLLP it sends and receives, one per clock, under the names the WaveCrux decoders bind to:
+
+<div align="center">
+  <img alt="Inside PIPEx1__pcieVHost, used by both sides: the pcieVHost C model writes each TLP and DLLP through VProc, in zero time, into four SV queues in pcieVHost.sv, which play them out one per clock on TlpTx/TlpRx/DllpTx/DllpRx ports; our wrapper turns them into dll_rx beats for a TL under test and into the names WaveCrux decoders auto-bind, next to the PIPE link" width="100%" src="0.doc/images/pcievhost-taps.drawio.png">
+</div>
+
+**VProc and mem_model:** a node's program runs on VProc; its memory is mem_model, the same for the C API and every HDL instance:
+
+<div align="center">
+  <img alt="VProc, the HDL side of a node: Clk, Node, Interrupt and the Update handshake in; a memory-mapped bus (Addr, BE, WE, RD, DataOut, DataIn, WRAck, RDAck) and optional bursts out; our coroutine patch" width="49%" src="0.doc/images/vproc-component.drawio.png">
+  <img alt="mem_model HDL component: a memory-mapped port, a write port, clk and rst_n on one side; burst write (tx_) and burst read (rx_) ports on the other" width="49%" src="0.doc/images/mem-model-component.drawio.png">
+</div>
 
 ### File Structure
 
@@ -118,7 +149,7 @@ Results (WSL2 Ubuntu 24.04, run time without the build; `WRAP=x1` is x1 Gen1, `L
 | 🟢 Vivado XSIM 2026.1 | PASS, 8.1 s | PASS, 7.8 s | PASS, 9.8 s | PASS, 10.0 s |
 | 🟠 JanusHDL 0.17.0 | PASS, 32 s | PASS, 27 s | no: a cast in `pcieVHostPipexN.sv` not supported at run time | no: `pipe_mac_adapter.sv` assertions do not parse |
 
-**Issues filed upstream**, still open:
+**Open upstream issues behind the results above:**
 
 | Tool | Issue | What | State |
 |---|---|---|---|
@@ -134,6 +165,12 @@ Needs gcc/g++, make, patch, and the simulator. Icarus needs its `vpi_user.h`; XS
 ### Waveforms
 
 `make WAVES=1 run` (any option, any simulator) also writes `work/waves/<SIM>.<config>.fst` and a [WaveCrux](https://wavecrux.app) session for it, `work/waves/<SIM>.<config>.wavecrux`: open the session (File > Open). It shows the link both ways, RC -> EP blue, EP -> RC orange: lane 0 at the PIPE (all four at `LANES=4`), the DLLPs and the TLPs, with Ferrite's PIPE and Data Link Layer decoders and the openPCIE TLP decoder. The LTSSM runs in C (`3.sw/ltssm`): the PIPE decoder shows its ordered sets.
+
+<div align="center">
+  <img alt="WaveCrux Pro on the Verilator x1 Gen2 dump, at 155.5 us: the RC's first configuration read (CfgRd0, TLP seq 0, 18 symbols) goes down; the Endpoint answers with a CplD (ID 0x000214FC, 22 symbols), then Ack seq 0 and UpdateFC; the same exchange at the PIPE, Data Link and Transaction layers, RC to EP blue, EP to RC orange" width="100%" src="0.doc/images/wavecrux.cfgrd-cpld.png">
+</div>
+
+The first configuration read of a run, at 155.5 µs: `CfgRd0` down, `CplD` up 48 ns later, then the Endpoint's `Ack` and `UpdateFC`, decoded at all three layers.
 
 A session binds by signal number, which differs between simulators, so each FST gets its own (`4.build/wavecrux-session.py`). The two next to the Makefile are for Verilator's default and `LANES=4` dumps: `tb.x1g2.TLP-DLL-PIPE.wavecrux`, `tb.x4g1.TLP-DLL-PIPE.wavecrux`. Needs `fst2vcd` (GTKWave), and `vcd2fst` for XSIM and JanusHDL, which write VCD.
 

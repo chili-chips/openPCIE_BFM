@@ -152,10 +152,10 @@ HDL_SRC     = $(VIP_DIR)/hdl/headers/allheaders.svh \
               $(if $(or $(HDL_ALL),$(filter core,$(PHY))),$(BFM)/2.rtl/pipe_phy_core.sv $(BFM)/2.rtl/pipe_mac_adapter.sv) \
               $(if $(or $(HDL_ALL),$(WAVES_X4)),$(BFM)/2.rtl/pipe_x4_view.sv) \
               $(CURDIR)/tb.sv
-# No `timescale in the HDL: each simulator gets 1ns/1ps on its command line
+# No `timescale in the HDL: each simulator gets 1ns/10ps on its command line
 # (Verilator --timescale, Icarus +timescale+ in a command file, xelab
 # --timescale; JanusHDL has 1ns/1ps fixed). The models' delays carry units.
-TIMESCALE   = 1ns/1ps
+TIMESCALE   = 1ns/10ps
 HDL_DEFS    = VPROC_BYTE_ENABLE SIM_LANES=$(LANES) RUN_US=$(RUN_US) $(if $(filter core,$(PHY)),SIM_PIPE_PHY) \
               $(if $(filter x1,$(WRAP)),SIM_PIPEX1) $(if $(filter-out icarus,$(SIM)),VPROC_SV) $(WAVES_DEFS)
 

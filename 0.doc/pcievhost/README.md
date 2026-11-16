@@ -41,9 +41,7 @@ Details: the [_pcievhost_ manual](https://github.com/wyvernSemi/pcievhost/blob/m
 
 `pcieVHost.sv` (in `verilog/pcieVHost`) is the model. `pcieVHostPipex1.sv`, in the same directory, wraps it as one link port of PIPE TX and RX data. Our `pcieVHostPipexN.sv` (in `2.rtl/`) does the same for any number of lanes.
 
-<div align=center>
-<img width="100%" alt="PIPExN__pcieVHost: PcieVhost and the PIPE-to-symbol logic inside pcieVHostPipexN, its clocks, and the layer views from the taps" src="../images/pcievhost-pipe-wrapper.drawio.png">
-</div>
+Diagram: [pcieVHost, in the top README](../../README.md#pcievhost).
 
 Clocks:
 
@@ -115,9 +113,7 @@ More in the [_pcievhost_ manual](https://github.com/wyvernSemi/pcievhost/blob/ma
 
 ### Internal Architecture
 
-<div align=center>
-<img width="100%" alt="The pcieVHost C model: user code calls the API; the send path goes through the send queue, SendPacket and codec.c to VProc and pcieVHost.sv; the receive path through ExtractPhyInput to ProcessInput and ProcessOs; mem.c and displink.c; our patches and tap ports" src="../images/pcievhost-architecture.drawio.png">
-</div>
+Diagram: [pcieVHost, in the top README](../../README.md#pcievhost).
 
 * **User code** (left): `VUserMain`<i>n</i> is the entry point and calls the [API](#user-api-summary). An optional callback (`VUserInput`) gets received packets the model does not handle, e.g. read completions.
 * **Send path:** TLP and DLLP calls queue packets for `SendPacket`; manual ACKs and NAKs skip the queue. `SendPacket` hands them to the `codec`, which scrambles, encodes and drives the link.

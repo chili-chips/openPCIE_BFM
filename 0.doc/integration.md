@@ -25,9 +25,7 @@ Each pcieVHost reports every TLP and DLLP it sends and receives on ports of its 
 - Both sides use them. In `5.sim-regression/tb.sv`: the RC model `u_rc` (`EndPoint=0`; `RCPIPEx1__pcieVHost` at `WRAP=x1`) and the EP model `u_ep` (`EndPoint=1`).
 - Each side has its decoder page, `tb.u_rc` and `tb.u_ep`, with the same names by link direction (dn = RC -> EP, up = EP -> RC). A packet shows on both, a link latency apart.
 
-<div align="center">
-<img alt="Inside PIPEx1__pcieVHost, used by both sides: the pcieVHost C model writes each TLP and DLLP through VProc, in zero time, into four SV queues in pcieVHost.sv, which play them out one per clock on TlpTx/TlpRx/DllpTx/DllpRx ports; our wrapper turns them into dll_rx beats for a TL under test and into the names WaveCrux decoders auto-bind, next to the PIPE link" width="100%" src="images/pcievhost-taps.drawio.png">
-</div>
+Diagram: [Integration, in the top README](../README.md#integration).
 
 | Layer | Ports of `tb.u_rc`, `tb.u_ep` | For |
 |---|---|---|
@@ -81,7 +79,7 @@ _VProc_ (virtual processor) and _mem_model_ (sparse memory, part of _pcievhost_)
 
 _VProc_ runs a natively compiled user program on an HDL processor component. C/C++ APIs issue reads and writes on its HDL bus and advance simulation time.
 
-<div align="center"><img alt="VProc, the HDL side of a node: Clk, Node, Interrupt and the Update handshake in; a memory-mapped bus (Addr, BE, WE, RD, DataOut, DataIn, WRAck, RDAck) and optional bursts out; our coroutine patch" width="80%" src="images/vproc-component.drawio.png"></div>
+Diagram: [Integration, in the top README](../README.md#integration).
 
 * **Bus:** generic memory mapped. openPCIE's `soc_cpu.VPROC.native` wrapper turns it into picorv32's native interface (`mem_valid`/`mem_ready`) with a little logic.
 * **Nodes:** instantiate as many as needed, each with a unique node number. Node *n* runs `VUserMain<n>` (e.g. `VUserMain0`), with C linkage for DPI.
@@ -144,17 +142,17 @@ extern "C" void VUserMain0(void)        // VProc "main" entry for node 0
 * Every function takes `node`: an address space, not the _VProc_ node. Almost always 0.
 * The HDL component may be instantiated any number of times; all instances see the same memory, shared with every _VProc_.
 
-<div align="center"><img alt="mem_model HDL component: a memory-mapped port, a write port, clk and rst_n on one side; burst write (tx_) and burst read (rx_) ports on the other" width="80%" src="images/mem-model-component.drawio.png"></div>
+Diagram: [Integration, in the top README](../README.md#integration).
 
 ## Timescale
 
-No `` `timescale `` in the HDL. The simulator command line gives it; 1ns/1ps here:
+No `` `timescale `` in the HDL. The simulator command line gives it; 1ns/10ps here:
 
 | Simulator | Option |
 |---|---|
-| Verilator | `--timescale 1ns/1ps` |
-| Icarus | `+timescale+1ns/1ps` in a `-c` command file |
-| XSIM | `xelab --timescale 1ns/1ps` |
+| Verilator | `--timescale 1ns/10ps` |
+| Icarus | `+timescale+1ns/10ps` in a `-c` command file |
+| XSIM | `xelab --timescale 1ns/10ps` |
 | JanusHDL | none: 1ns/1ps is fixed |
 
 The models' delays carry units, so any unit works. Clocks set in ps are written `#(N * 1ns / 1000.0)`, not `#(N * 1ps)`: the standard rounds a time literal to the precision (IEEE 1800-2017 5.8), so at 10 ps `1ps` is 0 and the clock stops (Icarus and JanusHDL round; Verilator and XSIM do not). `4.build/build-vip.sh` empties upstream's `WsTimeScale` and `VProcTimeScale`.
