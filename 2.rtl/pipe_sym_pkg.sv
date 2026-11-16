@@ -12,7 +12,8 @@
 //   pcievhost-speed.patch defines the same value as `NOSIG for upstream's
 //   code; pcieVHostPipexN.sv checks that the two agree.
 //
-//   Master: openPCIE 5.sim/models; openCologne-PCIE has an identical copy.
+//   Master: this file (openPCIE_BFM 2.rtl), a submodule of openPCIE and
+//   openCologne-PCIE.
 //==========================================================================
 
 package pipe_sym_pkg;

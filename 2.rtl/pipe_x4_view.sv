@@ -9,8 +9,8 @@
 //   (wavecrux-decoders decoders/pcie SPEC.md §12: data, datak, then
 //   data<l>, datak<l> per lane). dn = RC -> EP, up = EP -> RC.
 //
-//   phy_top.EP-PIPE-BFM.sv has one next to the pcieVHost EP; tb.sv dumps it only
-//   at x4 (make SIM_LANES=4), so an x1 dump has no lanes 1 to 3 for
+//   openPCIE's phy_top.EP-PIPE-BFM.sv has one next to the pcieVHost EP; tb.sv
+//   dumps it only at x4 (make LANES=4 WAVES=1; openPCIE: SIM_LANES=4), so an x1 dump has no lanes 1 to 3 for
 //   auto-bind to find. A module beside the EP, not a scope inside it:
 //   xsim drops $dumpvars on a scope below one already dumped, and cannot
 //   name a generate block at all.

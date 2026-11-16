@@ -39,8 +39,8 @@
 // Description:
 //   PIPEx1__pcieVHost: a pcieVHost on an x1 PIPE link, as RC (EndPoint=0) or
 //   EP (EndPoint=1), with the link offered at three layers, all always
-//   present. The test bench uses it for both sides: the host,
-//   RCPIPEx1__pcieVHost, and the EP model, EPPIPEx1__pcieVHost_DUT.
+//   present. With WRAP=x1 the self-test uses it for both sides: the host,
+//   RCPIPEx1__pcieVHost, and the EP.
 //
 //   TxData/RxData are this node's PIPE link. The other outputs are named by
 //   link direction, the same on both sides (dn = RC -> EP, up = EP -> RC),
@@ -58,12 +58,10 @@
 //                  RC -> EP): for the TLP decoder (decoders/pcie-tlp)
 //
 //   The TLPs and DLLPs come from the transaction taps we added to pcieVHost
-//   (models/pcievhost/README.md): what this node sends and receives. One net
+//   (0.doc/pcievhost/README.md): what this node sends and receives. One net
 //   under several names is an alias in the dump; WaveCrux offers every name
 //   of an alias from 1.1.
 //==========================================================================
-
-`timescale 1ps/1ps
 
 module PIPEx1__pcieVHost #(
     parameter int NodeNum   = 1,
@@ -140,8 +138,8 @@ module PIPEx1__pcieVHost #(
 
   always begin
     @(posedge pclk);
-    #((SYMCLK_HALF_PS / 2) * 1ps) pcieclk = 1'b0;
-    repeat (DataWidth / 4 - 1) #(SYMCLK_HALF_PS * 1ps) pcieclk = ~pcieclk;
+    #((SYMCLK_HALF_PS / 2) * 1ns / 1000.0) pcieclk = 1'b0;
+    repeat (DataWidth / 4 - 1) #(SYMCLK_HALF_PS * 1ns / 1000.0) pcieclk = ~pcieclk;
   end
 
   // The model's taps, as this node sees them: Tx = sent, Rx = received

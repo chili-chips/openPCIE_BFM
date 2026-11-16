@@ -9,7 +9,7 @@
 //   ports; each wraps it for its own pipe_if:
 //     openPCIE         models/phy_top.EP-PIPE-BFM.sv  (PCIE_2_1 hard macro)
 //     openCologne-PCIE models/phy_vproc_rc.sv         (our MAC)
-//   Master: openPCIE 5.sim/models; the copy in openCologne-PCIE is identical.
+//   Master: this file (openPCIE_BFM 2.rtl), a submodule of both projects.
 //
 //   The PIPE handshakes, as a PHY gives them (the GateMate PHY's
 //   ccfpga_pipe_fsm does the same):
@@ -30,8 +30,6 @@
 //   otherwise: a squelch that ignores what a partner drives before it trains
 //   (a model out of reset sends D0.0).
 //==========================================================================
-
-`timescale 1ps/1ps
 
 module pipe_phy_core
   import pipe_sym_pkg::*;

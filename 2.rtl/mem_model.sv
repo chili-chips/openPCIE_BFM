@@ -24,8 +24,6 @@
 // The SystemVerilog mem_model HDL is the same as the Verilog, 
 // with MEM_MODEL_SV defined to select DPI-C over PLI
 
-`timescale 1ps / 1ps
-
 `define MEM_MODEL_SV
 
 // verilator lint_save

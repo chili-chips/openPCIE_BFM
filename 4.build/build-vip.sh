@@ -19,9 +19,10 @@
 # Our changes to upstream are in 1.upstream/vip/ (4.build/vip-import.sh), but for
 # 1.upstream/patches/pcievhost-speed.patch and 1.upstream/patches/vproc-coroutine.patch: VIP_PATCH and VPROC_PATCH below.
 #
-# VIP_BUILD (default ~/.cache/openPCIE_BFM/vip) is the output; it is
-# rebuilt when a file in 1.upstream/vip/ or this script is newer, or VIP_PATCH has
-# changed. Needs gcc, ar, and patch for VIP_PATCH.
+# VIP_BUILD (default ~/.cache/openPCIE_BFM/vip) is the output, shared by all
+# checkouts; it is rebuilt when the content of 1.upstream/vip/, this script,
+# VIP_PATCH or VPROC_PATCH differs from the last build, or when Icarus is
+# installed and its libraries are missing. Needs gcc, ar, and patch for VIP_PATCH.
 #
 # VIP_PATCH: a patch on the pcieVHost C sources, core, PIPE wrapper, serialiser
 # and headers (-p1, a/src/..., a/verilog/..., upstream's .v names: mapped to
@@ -34,10 +35,14 @@ SRC=$(cd "$HERE/../1.upstream/vip" && pwd)
 OUT=${VIP_BUILD:-$HOME/.cache/openPCIE_BFM/vip}
 VIP_PATCH=${VIP_PATCH:-}
 VPROC_PATCH=${VPROC_PATCH:-}
-STAMP=$({ [ -n "$VIP_PATCH" ] && cat "$VIP_PATCH"; [ -n "$VPROC_PATCH" ] && cat "$VPROC_PATCH"; echo; } | sha256sum)
+STAMP=$({ [ -n "$VIP_PATCH" ] && cat "$VIP_PATCH"; [ -n "$VPROC_PATCH" ] && cat "$VPROC_PATCH"
+           cat "$0"
+           (cd "$SRC" && find . -type f -print0 | LC_ALL=C sort -z | xargs -0 sha256sum); } | sha256sum)
+ICA_INC=$(dirname "$(command -v iverilog 2>/dev/null || echo /usr/bin/iverilog)")/../include/iverilog
+M64=; [ "$(uname -m)" = x86_64 ] && M64=-m64
 
 if [ -f "$OUT/.built" ] && [ "$(cat "$OUT/.built")" = "$STAMP" ] &&
-   [ -z "$(find "$SRC" "$0" -newer "$OUT/.built" -print -quit)" ]; then
+   { [ ! -f "$ICA_INC/vpi_user.h" ] || [ -f "$OUT/lib/libpcieica.a" ]; }; then
     echo "$OUT"
     exit 0
 fi
@@ -75,7 +80,7 @@ if [ -n "$VPROC_PATCH" ]; then
 fi
 # ---- VProc: libcosimlnx.a (DPI-C), headers, HDL --------------------------------
 for f in VSched VUser; do
-    gcc -c -O2 -g -fPIC -m64 -I"$VC" -DVPROC_SV "$VC/$f.c" -o "$OUT/obj/$f.o"
+    gcc -c -O2 -g -fPIC $M64 -I"$VC" -DVPROC_SV "$VC/$f.c" -o "$OUT/obj/$f.o"
 done
 ar cr "$OUT/lib/libcosimlnx.a" "$OUT"/obj/VSched.o "$OUT"/obj/VUser.o
 for f in VProc.h VProcClass.h VProcIrqClass.h VSched_pli.h VUser.h; do
@@ -83,13 +88,20 @@ for f in VProc.h VProcClass.h VProcIrqClass.h VSched_pli.h VUser.h; do
 done
 for f in f_VProc.sv extradefs.svh vprocdefs.vh vprocdpi.vh; do lf "$V/$f" > "$OUT/hdl/$f"; done
 
+# No `timescale in the HDL: the simulator command line gives it. Upstream's
+# timescale macros become empty (below, for pcieVHost too).
+sed -i -E 's/^( *`define VProcTimeScale +)`timescale.*/\1/' "$OUT/hdl/extradefs.svh"
+# VProc's Update flag: a plain non-blocking assignment (upstream: <= `MINDELAY,
+# #0 on all simulators but Verilator)
+sed -i -E 's/<= *`MINDELAY +/<= /' "$OUT/hdl/f_VProc.sv"
+
 # ---- mem_model: HDL only (its C model is part of pcieVHost) ------------------
-lf "$SRC/mem_model/f_mem_model.sv" > "$OUT/hdl/f_mem_model.sv"
+sed '/^`timescale/d' "$SRC/mem_model/f_mem_model.sv" > "$OUT/hdl/f_mem_model.sv"
 lf "$SRC/mem_model/mem_model_dpi.vh" > "$OUT/hdl/mem_model_dpi.vh"
 
 # ---- pcieVHost: libpcielnx.a, headers, HDL, LTSSM helper ----------------------
 for f in codec mem pcie pcie_utils pcicrc32 displink; do
-    gcc -c -O2 -g -fPIC -m64 -I"$VC" -DVPROC_SV "$PS/$f.c" -o "$OUT/obj/$f.o"
+    gcc -c -O2 -g -fPIC $M64 -I"$VC" -DVPROC_SV "$PS/$f.c" -o "$OUT/obj/$f.o"
 done
 ar cr "$OUT/lib/libpcielnx.a" "$OUT"/obj/{codec,mem,pcie,pcie_utils,pcicrc32,displink}.o
 for f in codec.h mem.h pci_express.h pcie.h pcieModelClass.h pcie_utils.h pcie_vhost_map.h ltssm.h; do
@@ -100,24 +112,29 @@ H=$OUT/hdl/headers
 for f in allheaders.svh pciedispheader.svh pciexpress_header.svh timescale.svh; do
     lf "$PH/$f" > "$H/$f"
 done
+sed -i -E 's/^`define WsTimeScale .*/`define WsTimeScale/' "$H/timescale.svh"
 lf "$PH/pcie_vhost_map.svh" > "$H/pcie_vhost_map.svh"
 lf "$P/verilog/test/test_defs.svh" > "$H/test_defs.svh"
 
 for f in pcieVHost.sv pcieVHostPipex1.sv; do lf "$PV/$f" > "$OUT/hdl/$f"; done
 for f in clkmux.sv Serialiser.sv; do lf "$PL/$f" > "$OUT/hdl/$f"; done
+# Plain non-blocking assignments and inputs: upstream's `RegDel on its
+# registers and `PcieVHostSampleDel on its inputs go, so no delay hides a
+# race at a clock edge
+sed -i -E -e 's/<= *#`RegDel +/<= /' -e 's/assign +#`PcieVHostSampleDel +/assign /' "$OUT"/hdl/*.sv
+if grep -n '#`\(RegDel\|PcieVHostSampleDel\)' "$OUT"/hdl/*.sv >&2; then exit 1; fi
 
 # ---- Icarus: the same C models, over VPI instead of DPI-C ------------------------
 #   libcosimica.a  VProc, its VPI table supplied by pcieVHost's veriuser.c
 #   libpcieica.a   pcieVHost with veriuser.c and mem_model.c
-ICA_INC=$(dirname "$(command -v iverilog 2>/dev/null || echo /usr/bin/iverilog)")/../include/iverilog
 if [ -f "$ICA_INC/vpi_user.h" ]; then
     ICA="-DICARUS -DVPROC_PLI_VPI -DEXTERN_VPI_TABLE -D_REENTRANT -I$ICA_INC"
     for f in VSched VUser; do
-        gcc -c -O2 -g -fPIC -m64 -I"$VC" $ICA -Wno-int-to-pointer-cast "$VC/$f.c" -o "$OUT/obj/ica_$f.o"
+        gcc -c -O2 -g -fPIC $M64 -I"$VC" $ICA -Wno-int-to-pointer-cast "$VC/$f.c" -o "$OUT/obj/ica_$f.o"
     done
     ar cr "$OUT/lib/libcosimica.a" "$OUT"/obj/ica_VSched.o "$OUT"/obj/ica_VUser.o
     for f in codec mem mem_model pcie pcie_utils pcicrc32 displink veriuser; do
-        gcc -c -O2 -g -fPIC -m64 -Wno-incompatible-pointer-types -Wno-format -I"$VC" -I"$ICA_INC" \
+        gcc -c -O2 -g -fPIC $M64 -Wno-incompatible-pointer-types -Wno-format -I"$VC" -I"$ICA_INC" \
             -DICARUS "$PS/$f.c" -o "$OUT/obj/ica_$f.o"
     done
     ar cr "$OUT/lib/libpcieica.a" "$OUT"/obj/ica_{codec,mem,mem_model,pcie,pcie_utils,pcicrc32,displink,veriuser}.o
@@ -134,5 +151,5 @@ echo "$OUT"
 # Project:     openPCIE_BFM
 # Description: PCIE simulation model on pcieVHost
 # Version:     1.0
-# Date:        April 2025
+# Date:        2026
 # -----------------------------------------------------------------------------

@@ -1,8 +1,10 @@
+// SPDX-FileCopyrightText: 2025 Simon Southwell
 // SPDX-FileCopyrightText: 2025 Chili.CHIPS
 //
 // SPDX-License-Identifier: BSD-3-Clause
 
 //==========================================================================
+// Copyright (c) 2025 Simon Southwell (first version, contributed to openPCIE)
 // Copyright (c) 2025 Chili.CHIPS
 //--------------------------------------------------------------------------
 //
@@ -48,6 +50,7 @@
 
 #include "VProcClass.h"
 #include "pcieModelClass.h"
+// SIM_SWITCHED and HM_PROBE: openPCIE-only builds; their headers are not in this repo
 #ifdef SIM_SWITCHED
 #include "pcie_switch.h"
 #endif
@@ -61,17 +64,18 @@ extern "C" {
 }
 
 
-// Rates the endpoint advertises: 1 or 2 (make SIM_GEN)
+// Rates the endpoint advertises: 1 or 2 (make GEN; in openPCIE: SIM_GEN)
 #ifndef EP_GEN
 #define EP_GEN 1
 #endif
 
-// May reverse its lanes (make SIM_LANE_REV=ep or both)
+// May reverse its lanes (here the Makefile sets 1; in openPCIE: make
+// SIM_LANE_REV=ep or both)
 #ifndef LANE_REV_EP
 #define LANE_REV_EP 0
 #endif
 
-// make SIM_FAULT=...: the endpoint misbehaves, to drive the RC firmware's
+// In openPCIE, make SIM_FAULT=...: the endpoint misbehaves, to drive the RC firmware's
 // error paths
 //   crs      the first FAULT_CRS_COUNT Configuration requests get CRS
 //   nocpl    no Completion for the request after the RC's BAR0 write
@@ -366,7 +370,7 @@ extern "C" void VUserMain1(int node)
     pcieModelClass *pcie = new pcieModelClass(node);
 
 #ifdef SIM_SWITCHED
-    // RC-switched (make VARIANT=switched): pcie_switch.cpp answers every
+    // RC-switched (openPCIE: make VARIANT=switched): pcie_switch.cpp answers every
     // request as a switch with endpoints behind it, so the model's own memory
     // and config space are off
     pcie->initialisePcie(SwitchInput, pcie);
@@ -443,8 +447,8 @@ extern "C" void VUserMain1(int node)
 #endif
 
     // Initialise the link for as many lanes as the model has (its LinkWidth,
-    // set by the PIPE model: 1 or 4, make SIM_LANES), advertising Gen1 or
-    // Gen1+Gen2 (make SIM_GEN)
+    // set by the PIPE model: 1 or 4, make LANES), advertising Gen1 or
+    // Gen1+Gen2 (make GEN)
     unsigned lanes;
     vp1->read(LANESADDR, &lanes);
     InitLinkGen(lanes, (EP_GEN == 2) ? TS_DATA_RATE_GEN2 : TS_DATA_RATE_GEN1, node);
@@ -459,7 +463,7 @@ extern "C" void VUserMain1(int node)
     UpdateLinkStatus(pcie, lanes, node);
 
 #ifdef SPEED_TEST
-    // make SIM_SPEED_TEST=1: change the link down to Gen1 and back up, both
+    // openPCIE's make SIM_SPEED_TEST=1: change the link down to Gen1 and back up, both
     // from this side, when the RC's BAR sizing writes BAR0, then BAR1. Each
     // change starts with that write's Completion still to go, whenever the
     // RC's firmware gets there

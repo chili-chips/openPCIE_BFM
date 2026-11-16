@@ -31,26 +31,49 @@ Above the PIPE, it also **gives access to the Data Link and Transaction layers**
 `Cross-checked with the [WaveCrux](https://wavecrux.app) Protocol Decoders`
 > Ferrite's _PIPE_ and _Data Link Layer_ decoders and the _openPCIE TLP_ decoder read the same link in the waveform. Model and decoders were brought up against each other to check each other
 
-To our knowledge, this makes openPCI_BFM the first open-source PCIE transaction generator and protocol checker that is calibrated against both an industry-standard, silicon-proven PCIE hard macro and cross-checked by 3rd party protocol decoders.
+To our knowledge, this makes openPCIE_BFM the first open-source PCIE transaction generator and protocol checker that is both calibrated against an industry-standard, silicon-proven PCIE hard macro and cross-checked by 3rd party protocol decoders.
 
 
 ### Ecosystem
-This VIP is used within [openPCIE](https://github.com/chili-chips/openPCIE) (Artix-7 Root Complex) and [openCologne-PCIE](https://github.com/chili-chips/openCologne-PCIE) (GateMate Endpoint), as a git submodule of both. What it adds to the upstream _pcieVHost_:
+This VIP is used within [openPCIE](https://github.com/chili-chips/openPCIE) (Artix-7 Root Complex) and [openCologne-PCIE](https://github.com/chili-chips/openCologne-PCIE) (GateMate Endpoint), as a git submodule of both.
 
-#### The Artix-7 RC model
+<div align="center">
+  <a href="https://github.com/chili-chips/openPCIE"><img width="13%" alt="openPCIE Root Complex project logo" src="0.doc/artwork/pcie2rootc.hex.png"></a>
+  <a href="https://github.com/chili-chips/openCologne-PCIE"><img width="13%" alt="openCologne-PCIE project logo" src="0.doc/artwork/openCologne-PCIE.hex.png"></a>
+</div>
+
+### Made for portability
+
+| | Options |
+|---|---|
+| Role | Root Complex or Endpoint |
+| Link | x1 or x4; Gen1 (2.5 GT/s) or Gen2 (5 GT/s) |
+| Attach to | another model on the line, an RTL MAC (PHY side of PIPE) or a PIPE PHY (MAC side of PIPE): [three ways](0.doc/integration.md#three-ways-to-attach-pcievhost) |
+| Simulators | Verilator, Vivado XSIM, JanusHDL (DPI-C); Icarus (VPI, x1 wrappers) |
+| FPGAs | AMD Artix-7 (openPCIE), Cologne Chip GateMate (openCologne-PCIE) |
+
+#### How is it made?!
+
+<div align="center">
+  <img alt="openPCIE_BFM block diagram: two pcieVHost nodes, the Artix-7 RC model and an Endpoint, each a C program on VProc over the pcieVHost C model and its HDL wrappers, joined by a PIPE link (optionally through pipe_mac_adapter and pipe_phy_core, or on the serial line); taps of both nodes at the Transaction, Data Link and PIPE layers feed the WaveCrux decoders" width="100%" src="0.doc/images/openPCIE_BFM.block-diagram.drawio.png">
+</div>
+
+What it adds to the upstream _pcieVHost_:
+
+##### The Artix-7 RC model
 > pcieVHost set up as the AMD `PCIE_2_1` root port, calibrated against the hard macro. It trains the link, runs the RC firmware's requests and checks the Endpoint against 59 rules of the PCIE spec.
 
-#### Fixes and new features
-> Gen2 speed change through Recovery, lane reversal and polarity, one electrical-idle rule with no X or Z, transaction taps, fault injection, co-routines in VProc (about 22 times faster). Details: [what we added or removed](0.doc/model-changes.md#pcievhost-what-we-added-or-removed), [the issues we fixed](0.doc/model-changes.md#simulation-issues).
+##### Fixes and new features
+> Gen2 speed change through Recovery, lane reversal and polarity, one electrical-idle rule with no X or Z, transaction taps, fault injection, co-routines in VProc (about 22 times faster), no `#` delays on register outputs (Verilator 2 to 3 times faster; [timescale and delays](0.doc/integration.md#timescale)). Details: [what we added or removed](0.doc/model-changes.md#pcievhost-what-we-added-or-removed), [the issues we fixed](0.doc/model-changes.md#simulation-issues).
 
-#### PIPE adapters
+##### PIPE adapters
 > Our wrappers put the model on a PIPE link (x1 or x4), offer the link at the PIPE, Data Link and Transaction layers for waveform decoders, and act as the MAC or the PHY side of a PIPE with its handshakes.
 
-### Project Layout
+### File Structure
 
 | Path | What | License |
 |---|---|---|
-| `2.rtl/` | our SystemVerilog: `PIPExN__pcieVHost.sv` (x1/x4, Gen1/Gen2), `pcieVHostPipexN.sv` (upstream's PIPE wrapper for N lanes), `PIPEx1__pcieVHost.sv` and `RCPIPEx1__pcieVHost.sv` (x1 Gen1), `pipe_mac_adapter.sv` (MAC side of PIPE), `pipe_phy_core.sv` (PHY side of PIPE), `pipe_sym_pkg.sv`, `pipe_x4_view.sv`, `mem_model.sv` | BSD-3-Clause; `pcieVHostPipexN.sv`, `mem_model.sv` GPL-3.0-or-later |
+| `2.rtl/` | our SystemVerilog: `PIPExN__pcieVHost.sv` (x1/x4, Gen1/Gen2), `pcieVHostPipexN.sv` (our PIPE wrapper for N lanes, derived from upstream's `pcieVHostPipex1`), `PIPEx1__pcieVHost.sv` and `RCPIPEx1__pcieVHost.sv` (x1 Gen1), `pipe_mac_adapter.sv` (MAC side of PIPE), `pipe_phy_core.sv` (PHY side of PIPE), `pipe_sym_pkg.sv`, `pipe_x4_view.sv`, `mem_model.sv` | BSD-3-Clause; `pcieVHostPipexN.sv`, `mem_model.sv` GPL-3.0-or-later |
 | `3.sw/a7rc/` | the Artix-7 RC model: `VUserMain2.cpp` (VProc node 2), its checker `a7rc_check.cpp`, `ep_dma.h` | BSD-3-Clause |
 | `3.sw/ltssm/` | the LTSSM helper both nodes link in: `ltssm.c` (ours), `ltssm.c.orig` (upstream), `ltssm-openpcie.patch` | GPL-3.0-or-later |
 | `1.upstream/patches/` | our changes to upstream: `pcievhost-taps.patch` (applied at import), `pcievhost-speed.patch`, `vproc-coroutine.patch` (applied at build) | GPL-3.0-or-later |
@@ -78,9 +101,11 @@ make lint                 # Verible on our SystemVerilog (4.build/lint.verible)
 make clean                # removes work/
 ```
 
+`make all-sims` uses the default `WRAP=n`, which Icarus cannot run: it reports FAIL. `make all-sims WRAP=x1` runs all four on the x1 Gen1 wrappers.
+
 Options: `LANES=1|4`, `GEN=1|2`, `PHY=none|core` (`core`: the RC model is the MAC of `pipe_mac_adapter.sv` over `pipe_phy_core.sv`), `WRAP=n|x1` (`x1`: the x1 Gen1 wrappers), `A7RC=0|1` (tester or literal), `SEED=N`. Builds, logs and runs go to `work/` (git-ignored).
 
-- **Sanity** (`make sanity`, after every change): 7 runs, about 2 minutes. Verilator default, `LANES=4`, `PHY=core`, `A7RC=1`; Icarus `WRAP=x1`; XSIM and JanusHDL default.
+- **Sanity** (`make sanity`, after every change): 7 runs, about 3 minutes. Verilator default, `LANES=4`, `PHY=core`, `A7RC=1`; Icarus `WRAP=x1`; XSIM and JanusHDL default.
 - **Regression** (`make regression`, before a push): each simulator in 8 configurations (default, `WRAP=x1`, `WRAP=x1 A7RC=1`, `LANES=4`, `PHY=core`, `LANES=4 PHY=core`, `A7RC=1`, `GEN=1`), the same `===>` lines at `WRAP=x1` on all four, 10 seeds on Verilator; about 6 minutes.
 - The runs that do not work yet (Icarus but `WRAP=x1`; JanusHDL `LANES=4`, `PHY=core`; table below) are listed as known: they do not fail the list, and pass it once fixed.
 
@@ -100,6 +125,7 @@ Results (WSL2 Ubuntu 24.04, run time without the build; `WRAP=x1` is x1 Gen1, `L
 | Icarus Verilog | [iverilog#1789](https://github.com/steveicarus/iverilog/issues/1789), ours [#2](https://github.com/chili-chips/openPCIE_BFM/issues/2) | an `automatic` variable in a static `always` block (`PIPExN__pcieVHost.sv:120`) | open |
 | JanusHDL | [#1](https://github.com/chili-chips/openPCIE_BFM/issues/1) | a size cast by a parameter, `W'(x)`, at run time (`LANES=4`) | open |
 | JanusHDL | [openCologne-PCIE#1](https://github.com/chili-chips/openCologne-PCIE/issues/1) | no assertions yet; a labelled one gives a parse error (`PHY=core`) | open |
+| JanusHDL | [#3](https://github.com/chili-chips/openPCIE_BFM/issues/3) | no command-line default timescale; `+timescale+` ignored: always 1ns/1ps | open |
 
 JanusHDL has no public tracker (closed source, so it can read encrypted IP): its issues are in our repos, under the [`JanusHDL` label](https://github.com/issues?q=org%3Achili-chips+label%3AJanusHDL).
 
@@ -123,7 +149,7 @@ Then, as `5.sim-regression/Makefile` does:
 
 1. Build the VIP once: `VIP_DIR=$(VIP_PATCH=<bfm>/1.upstream/patches/pcievhost-speed.patch VPROC_PATCH=<bfm>/1.upstream/patches/vproc-coroutine.patch bash <bfm>/4.build/build-vip.sh)`. It prints the directory with `lib/` (DPI-C: `libcosimlnx.a`, `libpcielnx.a`; VPI: `libcosimica.a`, `libpcieica.a`), `include/` and `hdl/`.
 2. Compile your node programs with `3.sw/ltssm/ltssm.c` and, for the RC model, `3.sw/a7rc/VUserMain2.cpp` and `3.sw/a7rc/a7rc_check.cpp`. Defines: `-DVPROC -DEXCLUDE_LTSSM`, plus `-DVPROC_SV` (Verilator, XSIM, JanusHDL) or `-DICARUS`.
-3. Compile the HDL from `$VIP_DIR/hdl` and `2.rtl/`, with `+define+VPROC_BYTE_ENABLE` (and `VPROC_SV` but on Icarus). The top module must be `tb` with a task `Fatal`: pcieVHost calls `tb.Fatal`.
+3. Compile the HDL from `$VIP_DIR/hdl` and `2.rtl/`, with `+define+VPROC_BYTE_ENABLE` (and `VPROC_SV` but on Icarus). The top module must be `tb` with a task `Fatal`: pcieVHost calls `tb.Fatal`. No `` `timescale `` in the HDL: pass one on the command line ([per simulator](0.doc/integration.md#timescale)).
 4. Your project keeps its own: test benches, socket wrappers around these models, Endpoint programs, waveform views of the DUT.
 
 An Endpoint other than ours tells the RC model what to expect with `-DA7RC_EP_EXPECT='"file.h"'` (IDs and BAR sizes; see `3.sw/a7rc/VUserMain2.cpp`).
@@ -177,8 +203,10 @@ The RC model is calibrated against the AMD (Xilinx) 7 Series `PCIE_2_1` hard mac
 | Tool / project | Issue | What | State |
 |---|---|---|---|
 | Icarus Verilog | [iverilog#1789](https://github.com/steveicarus/iverilog/issues/1789), ours [#2](https://github.com/chili-chips/openPCIE_BFM/issues/2) | an `automatic` variable in a static `always` block (`PIPExN__pcieVHost.sv:120`) | open |
+| Verilator | [verilator#9240](https://github.com/verilator/verilator/issues/9240), ours [#4](https://github.com/chili-chips/openPCIE_BFM/issues/4) | a time literal finer than the time precision is not rounded (`1ps` at 1ns/10ps); our clocks no longer depend on it | open |
 | JanusHDL | [#1](https://github.com/chili-chips/openPCIE_BFM/issues/1) | 0.17.0: a size cast by a parameter, `W'(x)`, at run time (`LANES=4`) | open |
 | JanusHDL | [openCologne-PCIE#1](https://github.com/chili-chips/openCologne-PCIE/issues/1) | 0.17.0: no assertions yet; a labelled one gives a parse error (`PHY=core`) | open |
+| JanusHDL | [#3](https://github.com/chili-chips/openPCIE_BFM/issues/3) | 0.17.0: no command-line default timescale; `+timescale+` ignored: always 1ns/1ps | open |
 
 JanusHDL has no public tracker (closed source, so it can read encrypted IP): its issues are in our repos, under the [`JanusHDL` label](https://github.com/issues?q=org%3Achili-chips+label%3AJanusHDL).
 

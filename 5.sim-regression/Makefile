@@ -152,6 +152,10 @@ HDL_SRC     = $(VIP_DIR)/hdl/headers/allheaders.svh \
               $(if $(or $(HDL_ALL),$(filter core,$(PHY))),$(BFM)/2.rtl/pipe_phy_core.sv $(BFM)/2.rtl/pipe_mac_adapter.sv) \
               $(if $(or $(HDL_ALL),$(WAVES_X4)),$(BFM)/2.rtl/pipe_x4_view.sv) \
               $(CURDIR)/tb.sv
+# No `timescale in the HDL: each simulator gets 1ns/1ps on its command line
+# (Verilator --timescale, Icarus +timescale+ in a command file, xelab
+# --timescale; JanusHDL has 1ns/1ps fixed). The models' delays carry units.
+TIMESCALE   = 1ns/1ps
 HDL_DEFS    = VPROC_BYTE_ENABLE SIM_LANES=$(LANES) RUN_US=$(RUN_US) $(if $(filter core,$(PHY)),SIM_PIPE_PHY) \
               $(if $(filter x1,$(WRAP)),SIM_PIPEX1) $(if $(filter-out icarus,$(SIM)),VPROC_SV) $(WAVES_DEFS)
 
@@ -191,7 +195,7 @@ ifeq ($(SIM),verilator)
 SIMEXE      = $(OBJDIR)/Vtb
 $(SIMEXE): $(USERLIB) FORCE
 	@[ $(USERLIB) -nt $@ ] && rm -f $@; true
-	@$(VERILATOR) --binary -sv --timing --top-module tb -Mdir $(OBJDIR) $(if $(WAVES_ON),--trace-fst) \
+	@$(VERILATOR) --binary -sv --timing --timescale $(TIMESCALE) --top-module tb -Mdir $(OBJDIR) $(if $(WAVES_ON),--trace-fst) \
 	    -Wno-fatal -Wno-WIDTH -Wno-lint -Wno-style \
 	    $(addprefix +incdir+,$(HDL_INC)) $(addprefix +define+,$(HDL_DEFS)) $(HDL_SRC) \
 	    -MAKEFLAGS "--quiet CFG_LDFLAGS_VERILATED=" -CFLAGS "$(CPPSTD) -Wno-attributes" \
@@ -208,7 +212,8 @@ $(OBJDIR)/VProc.vpi: $(USERLIB)
 	    -Wl,-whole-archive -L$(VIP_DIR)/lib -lpcieica -lcosimica -Wl,-no-whole-archive \
 	    -L$(ICA_LIB) -lvpi -lrt -ldl
 $(SIMEXE): $(OBJDIR)/VProc.vpi FORCE
-	@$(IVERILOG) -g2012 -o $@ -s tb $(addprefix -I,$(HDL_INC)) $(addprefix -D,$(HDL_DEFS)) $(HDL_SRC)
+	@echo '+timescale+$(TIMESCALE)' > $(OBJDIR)/timescale.f
+	@$(IVERILOG) -g2012 -c $(OBJDIR)/timescale.f -o $@ -s tb $(addprefix -I,$(HDL_INC)) $(addprefix -D,$(HDL_DEFS)) $(HDL_SRC)
 SIM_CMD     = $(VVP) -n -M $(OBJDIR) -m VProc $(SIMEXE) $(if $(WAVES_ON),-fst)
 endif
 
@@ -225,7 +230,7 @@ ifeq ($(SIM),xsim)
 SIMEXE      = $(OBJDIR)/xsim.dir/tb/xsimk
 $(SIMEXE): $(OBJDIR)/VProc.so FORCE
 	@cd $(OBJDIR) && $(XVLOG) -sv --nolog $(addprefix -i ,$(HDL_INC)) $(addprefix --define ,$(HDL_DEFS)) $(HDL_SRC) > xvlog.out || { cat xvlog.out; exit 1; }
-	@cd $(OBJDIR) && $(XELAB) --nolog -sv_root $(OBJDIR) -sv_lib VProc --timescale 1ps/1ps $(if $(WAVES_ON),--debug typical) \
+	@cd $(OBJDIR) && $(XELAB) --nolog -sv_root $(OBJDIR) -sv_lib VProc --timescale $(TIMESCALE) $(if $(WAVES_ON),--debug typical) \
 	    --snapshot tb work.tb > xelab.out || { cat xelab.out; exit 1; }
 SIM_CMD     = $(XSIM) --nolog -R tb
 endif

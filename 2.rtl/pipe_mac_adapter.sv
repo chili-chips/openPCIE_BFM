@@ -31,10 +31,9 @@
 //   PHY's answers (PhyStatus within PHYSTATUS_TO PCLK, never unasked, no X
 //   out of Reset).
 //
-//   Master: openPCIE 5.sim/models.
+//   Master: this file (openPCIE_BFM 2.rtl), a submodule of openPCIE and
+//   openCologne-PCIE.
 //==========================================================================
-
-`timescale 1ps/1ps
 
 module pipe_mac_adapter
   import pipe_sym_pkg::*;

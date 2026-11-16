@@ -8,9 +8,9 @@ One model (the same core, C model and patches) with an adapter for what it talks
 
 | Adapter | The model plays | It talks to | Files | PIPE |
 |---|---|---|---|---|
-| **Line** | a whole node on the wire | another model | `pcieVHostPipex1.sv`, `pcieVHostPipexN.sv`; `Serialiser.sv` with `IFACE=serial` | not PIPE: it models the line. Idle is `NOSIG` ([special values](pcievhost/README.md#special-values-on-the-line)). The fastest with `IFACE=pipe`: a symbol per clock, no 8b/10b, no scrambling; the regression runs on it. `IFACE=serial` steps every bit, 8b/10b and scrambling on, so it is slower |
+| **Line** | a whole node on the wire | another model | `pcieVHostPipex1.sv`, `pcieVHostPipexN.sv`; `Serialiser.sv` on the serial line (openPCIE: `IFACE=serial`) | not PIPE: it models the line. Idle is `NOSIG` ([special values](pcievhost/README.md#special-values-on-the-line)). The fastest at the PIPE (openPCIE: `IFACE=pipe`): a symbol per clock, no 8b/10b, no scrambling; the regression runs on it. `IFACE=serial` steps every bit, 8b/10b and scrambling on, so it is slower |
 | **PIPE-PHY** | the PHY and the far node | an RTL MAC directly, with no SerDes | openPCIE_BFM's `pipe_phy_core.sv`, wrapped by `models/phy_top.EP-PIPE-BFM.sv` (the hard macro's MAC); in openCologne-PCIE by `phy_vproc_rc.sv` (its EP's MAC) | the PHY side of PIPE with its handshakes: PhyStatus on power-state and rate changes (and in PIPE reset, but not for the hard macro: `RST_LAT = 0`), receiver detection; TxElecIdle in, RxElecIdle and RxValid out. Shortcuts: a receiver is always present for the hard macro (`rcvr_present` tied to 1; `PHY=core` ties it to the endpoint's reset, so the first detection fails), PCLK switches at once on a rate change |
-| **PIPE-MAC** | the MAC | a PIPE PHY | openPCIE_BFM's `pipe_mac_adapter.sv`; on `pipe_phy_core.sv` (`RC=model PHY=core`), and in the hard macro's socket (`PHY=hm`, `models/pcie_core.RC-model.sv`): x1 and x4, Gen1 and Gen2 pass as without it | the MAC side of PIPE, with its handshakes: PIPE reset, receiver detection in P1 (again after a quiet time if none), P0, rate change; idle per lane. Its rules are assertions that end the run |
+| **PIPE-MAC** | the MAC | a PIPE PHY | openPCIE_BFM's `pipe_mac_adapter.sv`; on `pipe_phy_core.sv` (`make PHY=core`; openPCIE: `RC=model PHY=core`), and in openPCIE in the hard macro's socket (`PHY=hm`, `models/pcie_core.RC-model.sv`): x1 and x4, Gen1 and Gen2 pass as without it | the MAC side of PIPE, with its handshakes: PIPE reset, receiver detection in P1 (again after a quiet time if none), P0, rate change; idle per lane. Its rules are assertions that end the run |
 
 The SerDes BFM stays below all three, at the level of the GateMate silicon.
 
@@ -21,15 +21,15 @@ Each pcieVHost reports every TLP and DLLP it sends and receives on ports of its 
 - **C side** (`src/displink.c`): `TapTl()` / `TapDll()`, called from `DispTl()` / `DispDll()`, write each TLP DW and each DLLP word to new addresses in `src/pcie_vhost_map.h`, with VProc delta writes, so no simulation time passes.
 - **HDL side** (`pcieVHost.sv`): SystemVerilog queues play those words out one per clock on `TlpTx*` / `TlpRx*` (`Data`, `Sop`, `Eop`, `Valid`) and `DllpTx*` / `DllpRx*` (`Data`, `Valid`). `pcieVHostPipex1.sv` passes them through.
 - **TLP format:** byte 0 in bits 31:24, no framing, sequence number or LCRC. Nullified TLPs (EDB) are left out. DLLPs carry their 4 bytes, no CRC.
-- openPCIE_BFM's wrapper `PIPEx1__pcieVHost` offers each packet at three layers, from one run, all always present.
-- Both sides use it: the host `RCPIPEx1__pcieVHost` (`EndPoint=0`) and the EP model `EPPIPEx1__pcieVHost_DUT` (`EndPoint=1`).
-- Each side has its decoder page, `tb.u_rc` and `tb.dut.bfm_pcie`, with the same names by link direction (dn = RC -> EP, up = EP -> RC). A packet shows on both, a link latency apart.
+- Our wrappers `PIPExN__pcieVHost` and `PIPEx1__pcieVHost` offer each packet at three layers, from one run, all always present.
+- Both sides use them. In `5.sim-regression/tb.sv`: the RC model `u_rc` (`EndPoint=0`; `RCPIPEx1__pcieVHost` at `WRAP=x1`) and the EP model `u_ep` (`EndPoint=1`).
+- Each side has its decoder page, `tb.u_rc` and `tb.u_ep`, with the same names by link direction (dn = RC -> EP, up = EP -> RC). A packet shows on both, a link latency apart.
 
 <div align="center">
 <img alt="Inside PIPEx1__pcieVHost, used by both sides: the pcieVHost C model writes each TLP and DLLP through VProc, in zero time, into four SV queues in pcieVHost.sv, which play them out one per clock on TlpTx/TlpRx/DllpTx/DllpRx ports; our wrapper turns them into dll_rx beats for a TL under test and into the names WaveCrux decoders auto-bind, next to the PIPE link" width="100%" src="images/pcievhost-taps.drawio.png">
 </div>
 
-| Layer | Ports of `tb.u_rc`, `tb.dut.bfm_pcie` | For |
+| Layer | Ports of `tb.u_rc`, `tb.u_ep` | For |
 |---|---|---|
 | PIPE | `pipe_dn_*`, `pipe_up_*` (`pclk`, `data`, `datak`) | the link; PIPE and DLL decoders |
 | Data Link | `dll_rx_*`, on `dll_clk`: TLPs (`data`, `tlp_valid`, `tlp_first`, `tlp_last`) and DLLPs (`hdr_credit`, `data_credit`, `update_type`, `packet_type`, `dllp_valid`) | RC -> EP traffic as an EP's DLL hands it to its TL (`dll_if` RX side): drives a TL under test |
@@ -41,7 +41,7 @@ The `dll_rx_*` fields follow the DLL ([DLL draft v2](https://github.com/chili-ch
 What it gives us:
 
 - **RTL driven from the model.** `dll_rx_*` has the shape of `dll_if`'s RX side, so a TL can be tested without the MAC and DLL below it, on its own clock.
-- **A reference for the DUT.** What the host sent and received, packet by packet, to compare against the DUT's own TL and DLL interfaces with `EP=rtl`.
+- **A reference for the DUT.** What the host sent and received, packet by packet, to compare against the DUT's own TL and DLL interfaces (in openCologne-PCIE: `make EP=rtl`).
 - **Self-checking tests.** A checker reads the taps, not the console log.
 - **Decoder fixtures from an open simulator.** Verilator and Icarus give the same TLPs at the same times (50 each way in the enumeration run), with expected values from the model, not from a decoder.
 - **Any link partner.** The host's taps work with the EP model and the EP RTL alike; with the EP model, both ends of the link are tapped.
@@ -81,32 +81,85 @@ _VProc_ (virtual processor) and _mem_model_ (sparse memory, part of _pcievhost_)
 
 _VProc_ runs a natively compiled user program on an HDL processor component. C/C++ APIs issue reads and writes on its HDL bus and advance simulation time.
 
-<div align="center"><img alt="VProc virtual processor" width=450 src="https://github.com/user-attachments/assets/b272d61c-fa97-4ba2-a609-307ed4d0840c"></div>
+<div align="center"><img alt="VProc, the HDL side of a node: Clk, Node, Interrupt and the Update handshake in; a memory-mapped bus (Addr, BE, WE, RD, DataOut, DataIn, WRAck, RDAck) and optional bursts out; our coroutine patch" width="80%" src="images/vproc-component.drawio.png"></div>
 
 * **Bus:** generic memory mapped. openPCIE's `soc_cpu.VPROC.native` wrapper turns it into picorv32's native interface (`mem_valid`/`mem_ready`) with a little logic.
 * **Nodes:** instantiate as many as needed, each with a unique node number. Node *n* runs `VUserMain<n>` (e.g. `VUserMain0`), with C linkage for DPI.
-* **Link to the simulator:** SystemVerilog DPI-C. The user program runs as a coroutine on the simulator's thread, in lock-step with the simulation.
-* **Build:** user programs and the _VProc_ library link into one shared object, `VProc.so`, loaded by the simulator at run time.
+* **Link to the simulator:** SystemVerilog DPI-C (VPI on Icarus). The user program runs as a coroutine on the simulator's thread, in lock-step with the simulation.
+* **Build:** user programs link with the _VProc_ library. Verilator: into the simulator executable, `Vtb`. XSIM and JanusHDL: into a shared object, `VProc.so`, loaded at run time. Icarus: into a VPI module, `VProc.vpi`.
 
 C and C++ APIs, abbreviated:
 
-<div align="center"><img alt="VProc C and C++ API summary" width=700 src="https://github.com/user-attachments/assets/f8dd88fe-ed63-4a6c-a0eb-55a13d0f845d"></div>
+```c++
+// C API                                      // C++ API (VProcClass.h)
+VWrite   (addr,  data,     delta, node);      vp->writeByte  (addr,  data, delta=0);
+VWriteBE (addr,  data, be, delta, node);      vp->writeHword (addr,  data, delta=0);
+VRead    (addr, *data,     delta, node);      vp->writeWord  (addr,  data, delta=0);
+VTick    (ticks,                  node);      vp->readByte   (addr, *data, delta=0);
+                                              vp->readHword  (addr, *data, delta=0);
+                                              vp->readWord   (addr, *data, delta=0);
+                                              vp->tick       (ticks);
+```
 
-User code runs in zero simulation time. Time advances on each transaction, or with `tick` without one. With these calls alone you can write test programs that drive the core's CSR registers from `soc_cpu.VPROC`, such as:
+User code runs in zero simulation time. Time advances on each transaction, or with `tick` without one. With these calls alone you can write a test program, such as:
 
-<div align="center"><img alt="A simple VProc test program" width=600 src="https://github.com/user-attachments/assets/a5b03827-e882-42d5-8765-c9cc3128b31a"></div>
+```c++
+#include "VProcClass.h"
+extern "C" {
+#include "mem.h"
+}
+
+static const int node = 0;
+
+extern "C" void VUserMain0(void)        // VProc "main" entry for node 0
+{
+    VProc* vp0 = new VProc(node);       // VProc API object for node 0
+
+    vp0->tick(100);                     // wait a bit
+
+    uint32_t addr  = 0x10001000;
+    uint32_t wdata = 0x900dc0de;
+    vp0->writeWord(addr, wdata);
+    VPrint("Written   0x%08x  to  addr 0x%08x\n", wdata, addr);
+
+    vp0->tick(3);                       // emulate some processing
+
+    uint32_t rdata;
+    vp0->readWord(addr, &rdata);
+    if (rdata == wdata)
+        VPrint("Read back 0x%08x from addr 0x%08x\n", rdata, addr);
+    else
+        VPrint("***ERROR: data mismatch at addr = 0x%08x\n", addr);
+
+    while (true)                        // sleep forever, the simulation goes on
+        vp0->tick(GO_TO_SLEEP);
+}
+```
 
 ### _mem_model_
 
-[mem_model](https://github.com/wyvernSemi/mem_model) is a sparse memory written in C as part of [_pcievhost_](https://github.com/wyvernSemi/pcievhost), plus a `mem_model` HDL component with Avalon style ports (memory mapped, burst, write). _VProc_ code calls the C API directly:
-
-<div align="center"><img alt="mem_model C API summary" width=400 src="https://github.com/user-attachments/assets/06278e89-e718-4396-9a05-d8c9cbb51efa"></div>
+[mem_model](https://github.com/wyvernSemi/mem_model) is a sparse memory written in C as part of [_pcievhost_](https://github.com/wyvernSemi/pcievhost), plus a `mem_model` HDL component with Avalon style ports (memory mapped, burst, write). _VProc_ code calls the C API directly ([`mem.h`, above](#vproc-and-memh-api)):
 
 * Writes take `address`, `data` and, for wider words, a little-endian flag `le`. Reads take `address` (and `le` where needed) and return the value.
 * Every function takes `node`: an address space, not the _VProc_ node. Almost always 0.
 * The HDL component may be instantiated any number of times; all instances see the same memory, shared with every _VProc_.
 
-<div align="center"><img alt="mem_model HDL component" width=400 src="https://github.com/user-attachments/assets/e991b49b-8b50-4e8f-bf7d-caa96992a680"></div>
+<div align="center"><img alt="mem_model HDL component: a memory-mapped port, a write port, clk and rst_n on one side; burst write (tx_) and burst read (rx_) ports on the other" width="80%" src="images/mem-model-component.drawio.png"></div>
+
+## Timescale
+
+No `` `timescale `` in the HDL. The simulator command line gives it; 1ns/1ps here:
+
+| Simulator | Option |
+|---|---|
+| Verilator | `--timescale 1ns/1ps` |
+| Icarus | `+timescale+1ns/1ps` in a `-c` command file |
+| XSIM | `xelab --timescale 1ns/1ps` |
+| JanusHDL | none: 1ns/1ps is fixed |
+
+The models' delays carry units, so any unit works. Clocks set in ps are written `#(N * 1ns / 1000.0)`, not `#(N * 1ps)`: the standard rounds a time literal to the precision (IEEE 1800-2017 5.8), so at 10 ps `1ps` is 0 and the clock stops (Icarus and JanusHDL round; Verilator and XSIM do not). `4.build/build-vip.sh` empties upstream's `WsTimeScale` and `VProcTimeScale`.
+
+No `#` delay on register outputs or inputs: `build-vip.sh` removes upstream's `` #`RegDel `` (its registers), `` #`PcieVHostSampleDel `` (its link inputs) and VProc's `` <= `MINDELAY `` (`Update`). Plain non-blocking assignments, so no delay hides a race at a clock edge. Verilator also runs 2 to 3 times faster without them (self-test run: 1.53 s to 0.52 s at x1, 1.59 s to 0.72 s at x4); Icarus, XSIM and JanusHDL within 3%.
 
 ## Build defines
 
@@ -129,7 +182,7 @@ openPCIE ran this model on XSIM only; openCologne-PCIE moved it to Verilator and
 3. **Electrical idle: `NOSIG`.** An electrically idle PCIE line carries no signal. Upstream models it as `Z` on a 4-state simulator, and under Verilator (2-state) as zeros plus a side-band, `ElecIdleOut` and `ElecIdleIn`. openPCIE's patch drops both: each idle symbol on the PIPE is `NOSIG`, the K flag and `0xFF` (no 8b/10b code), on Verilator and Icarus alike. Verilator can't be trusted with `Z` here: its `=== 'z` reads a driven 0 as `Z` ([#17](https://github.com/chili-chips/openCologne-PCIE/issues/17)).
 4. **One LTSSM on both sides.** On openPCIE the model plays the EP, an upstream port, against a real `PCIE_2_1` downstream port; the patch makes it spec-correct: an upstream port keeps sending Link/Lane = PAD in its TS1 until the downstream port assigns the numbers. Upstream's model takes a shortcut that only works against a copy of itself, so the patched EP would deadlock in Configuration.Start against pcieVHost's own RC, on both simulators. With upstream's RC as our host, we used upstream's `ltssm.c`. The host is now openPCIE's Artix-7 RC model, which assigns Link and Lane numbers as the hard macro does, so both sides use openPCIE's `ltssm.c`, patch included.
 5. **Macros before models.** The pcieVHost models use macros (`WsTimeScale`, `RegDel`, the comma symbols, the register map) from its headers. Under Verilator the first file in the list happened to pull them in for all others; not under Icarus. [`tb.f`](https://github.com/chili-chips/openCologne-PCIE/blob/main/5.sim/tb.f) now names `allheaders.svh` first, for both.
-6. **Portable delays.** Icarus rejected the test bench's `#(N * 1ps)` delays. The file's timescale is 1 ps, so plain numbers mean the same everywhere; the run limit is a 64-bit constant, as 10 ms in picoseconds overflows 32 bits.
+6. **Portable delays.** Delays carry units and the timescale comes from the command line ([Timescale](#timescale)); the run limit is a 64-bit constant, as 10 ms in picoseconds overflows 32 bits.
 
 --------------------
 #### End of Document

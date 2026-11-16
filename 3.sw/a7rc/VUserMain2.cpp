@@ -1452,7 +1452,7 @@ extern "C" void VUserMain2(int node)
     SetLaneReversal(LANE_REV_RC && !A7RC_LITERAL, node);
 
     unsigned lanes;
-    vp2->read(LANESADDR, &lanes);   // the wrapper's Lanes: make SIM_LANES
+    vp2->read(LANESADDR, &lanes);   // the wrapper's Lanes: make LANES (openPCIE: SIM_LANES)
     if (lanes == 4)
     {
         a7rc_ack_ticks = A7RC_ACK_TICKS_X4;

@@ -26,6 +26,14 @@ precedence = "closest"
 SPDX-FileCopyrightText = "2004-2025 Simon Southwell"
 SPDX-License-Identifier = "GPL-3.0-or-later"
 
+# Redrawn for openPCIE_BFM from Simon Southwell's figures (contributed to
+# openPCIE): pcieVHost architecture, pcieVHostPipex1, VProc and mem_model.
+[[annotations]]
+path = ["0.doc/images/pcievhost-architecture.drawio*", "0.doc/images/pcievhost-pipe-wrapper.drawio*", "0.doc/images/vproc-component.drawio*", "0.doc/images/mem-model-component.drawio*"]
+precedence = "override"
+SPDX-FileCopyrightText = ["2026 CHILI.CHIPS.LLC", "2025 Simon Southwell (original figures)"]
+SPDX-License-Identifier = "BSD-3-Clause"
+
 # Third-party logos, shown for acknowledgment only (NOT open-licensed)
 [[annotations]]
 path = ["0.doc/artwork/**"]
@@ -42,7 +50,7 @@ SPDX-License-Identifier = "BSD-3-Clause"
 
 # our own logo, in 0.doc/artwork with the third-party ones
 [[annotations]]
-path = ["0.doc/artwork/openPCIE_BFM.hex.*"]
+path = ["0.doc/artwork/openPCIE_BFM.hex.*", "0.doc/artwork/pcie2rootc.hex.png", "0.doc/artwork/openCologne-PCIE.hex.png"]
 precedence = "override"
 SPDX-FileCopyrightText = "2026 CHILI.CHIPS.LLC"
 SPDX-License-Identifier = "BSD-3-Clause"

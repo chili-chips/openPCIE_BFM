@@ -42,7 +42,7 @@ Details: the [_pcievhost_ manual](https://github.com/wyvernSemi/pcievhost/blob/m
 `pcieVHost.sv` (in `verilog/pcieVHost`) is the model. `pcieVHostPipex1.sv`, in the same directory, wraps it as one link port of PIPE TX and RX data. Our `pcieVHostPipexN.sv` (in `2.rtl/`) does the same for any number of lanes.
 
 <div align=center>
-<img width=800 src="images/pcievhost_module.png">
+<img width="100%" alt="PIPExN__pcieVHost: PcieVhost and the PIPE-to-symbol logic inside pcieVHostPipexN, its clocks, and the layer views from the taps" src="../images/pcievhost-pipe-wrapper.drawio.png">
 </div>
 
 Clocks:
@@ -103,7 +103,7 @@ Control it with `hex/ContDisps.hex`, below the run directory. Each line: a hex c
 | 1 | `DispFinish` | finish the simulation |
 | 0 | `DispAll` | all layers, whatever the other bits |
 
-Output for the example file above:
+Output for the example file above (screenshot by Simon Southwell, contributed to openPCIE):
 
 <div align=center>
 <img  width=750 src="images/pcie_disp_terminal.png" style="box-shadow: 5px 5px 5px gray;">
@@ -116,7 +116,7 @@ More in the [_pcievhost_ manual](https://github.com/wyvernSemi/pcievhost/blob/ma
 ### Internal Architecture
 
 <div align=center>
-<img width=1000 src="images/pcievhost_architecture.png">
+<img width="100%" alt="The pcieVHost C model: user code calls the API; the send path goes through the send queue, SendPacket and codec.c to VProc and pcieVHost.sv; the receive path through ExtractPhyInput to ProcessInput and ProcessOs; mem.c and displink.c; our patches and tap ports" src="../images/pcievhost-architecture.drawio.png">
 </div>
 
 * **User code** (left): `VUserMain`<i>n</i> is the entry point and calls the [API](#user-api-summary). An optional callback (`VUserInput`) gets received packets the model does not handle, e.g. read completions.

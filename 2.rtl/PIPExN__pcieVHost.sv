@@ -6,13 +6,13 @@
 // Description:
 //   PIPExN__pcieVHost: a pcieVHost on an x1 or x4 PIPE link, as RC
 //   (EndPoint=0) or EP (EndPoint=1), with the link offered at three layers,
-//   all always present. Here it is the EP, in models/phy_top.EP-PIPE-BFM.sv. At
+//   all always present. In openPCIE it is the EP (models/phy_top.EP-PIPE-BFM.sv). At
 //   Lanes = 1 it is openCologne-PCIE's PIPEx1__pcieVHost, which that project
 //   uses for its host and its mock EP.
 //
 //   TxData/RxData are this node's PIPE link, lane l in bits
 //   [l*DataWidth +: DataWidth]. x1 runs upstream's pcieVHostPipex1, x4 our
-//   pcieVHostPipexN (models/pcieVHostPipexN.sv). The other outputs are named by
+//   pcieVHostPipexN (2.rtl/pcieVHostPipexN.sv). The other outputs are named by
 //   link direction, the same on both sides (dn = RC -> EP, up = EP -> RC),
 //   with the names WaveCrux auto-binds (a decoder signal matches the suffix
 //   of a port name under a shared prefix):
@@ -20,7 +20,7 @@
 //     PIPE         pipe_dn_*, pipe_up_* (pclk, data, datak): copies of the
 //                  link (lane 0), for the PIPE and Data Link Layer decoders
 //                  (wavecrux-decoders, decoders/pcie). All four lanes of
-//                  an x4 link: pipe_x4_view (models/pipe_x4_view.sv)
+//                  an x4 link: pipe_x4_view (2.rtl/pipe_x4_view.sv)
 //     Data Link    dll_rx_*: the RC -> EP TLPs as an EP's DLL hands them to
 //                  its TL (dll_if rx_data, rx_tlp_valid/first/last), on
 //                  dll_clk: drives a TL under test without the MAC and DLL
@@ -29,12 +29,10 @@
 //                  RC -> EP): for the TLP decoder (decoders/pcie-tlp)
 //
 //   The TLPs and DLLPs come from the transaction taps we added to pcieVHost
-//   (models/pcievhost/README.md): what this node sends and receives. One net
+//   (0.doc/pcievhost/README.md): what this node sends and receives. One net
 //   under several names is an alias in the dump; WaveCrux offers every name
 //   of an alias from 1.1.
 //==========================================================================
-
-`timescale 1ps/1ps
 
 module PIPExN__pcieVHost #(
     parameter int NodeNum   = 1,
@@ -121,8 +119,8 @@ module PIPExN__pcieVHost #(
 
     @(posedge pclk);
     half = (gen2 === 1'b1) ? SYMCLK_HALF_GEN2_PS : SYMCLK_HALF_GEN1_PS;
-    #((half / 2) * 1ps) pcieclk = 1'b0;
-    repeat (DataWidth / 4 - 1) #(half * 1ps) pcieclk = ~pcieclk;
+    #((half / 2) * 1ns / 1000.0) pcieclk = 1'b0;
+    repeat (DataWidth / 4 - 1) #(half * 1ns / 1000.0) pcieclk = ~pcieclk;
   end
 
   // The model's taps, as this node sees them: Tx = sent, Rx = received
