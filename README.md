@@ -241,10 +241,10 @@ The RC model is calibrated against the AMD (Xilinx) 7 Series `PCIE_2_1` hard mac
 | Tool / project | Issue | What | State |
 |---|---|---|---|
 | Icarus Verilog | [iverilog#1789](https://github.com/steveicarus/iverilog/issues/1789), ours [#2](https://github.com/chili-chips/openPCIE_BFM/issues/2) | an `automatic` variable in a static `always` block (`PIPExN__pcieVHost.sv:120`) | open |
-| Verilator | [verilator#9240](https://github.com/verilator/verilator/issues/9240), ours [#4](https://github.com/chili-chips/openPCIE_BFM/issues/4) | a time literal finer than the time precision is not rounded (`1ps` at 1ns/10ps); our clocks no longer depend on it | open |
 | JanusHDL | [#1](https://github.com/chili-chips/openPCIE_BFM/issues/1) | 0.17.0: a size cast by a parameter, `W'(x)`, at run time (`LANES=4`) | open |
 | JanusHDL | [openCologne-PCIE#1](https://github.com/chili-chips/openCologne-PCIE/issues/1) | 0.17.0: no assertions yet; a labelled one gives a parse error (`PHY=core`) | open |
 | JanusHDL | [#3](https://github.com/chili-chips/openPCIE_BFM/issues/3) | 0.17.0: no command-line default timescale; `+timescale+` ignored: always 1ns/1ps | open |
+| Verilator | [verilator#9240](https://github.com/verilator/verilator/issues/9240), ours [#4](https://github.com/chili-chips/openPCIE_BFM/issues/4) | a time literal finer than the time precision is not rounded (`1ps` at 1ns/10ps); our clocks no longer depend on it | closed: Verilator keeps the literal, as XSIM does, and now warns (`TIMEPRECTRUNC`, on master, not yet released) |
 
 JanusHDL has no public tracker (closed source, so it can read encrypted IP): its issues are in our repos, under the [`JanusHDL` label](https://github.com/issues?q=org%3Achili-chips+label%3AJanusHDL).
 
