@@ -35,8 +35,10 @@ SRC=$(cd "$HERE/../1.upstream/vip" && pwd)
 OUT=${VIP_BUILD:-$HOME/.cache/openPCIE_BFM/vip}
 VIP_PATCH=${VIP_PATCH:-}
 VPROC_PATCH=${VPROC_PATCH:-}
+# always applied: VInit started by a non-blocking assignment, not `MINDELAY (#0)
+VINIT_PATCH=$HERE/../1.upstream/patches/f_VProc-vinit.patch
 STAMP=$({ [ -n "$VIP_PATCH" ] && cat "$VIP_PATCH"; [ -n "$VPROC_PATCH" ] && cat "$VPROC_PATCH"
-           cat "$0"
+           cat "$0" "$VINIT_PATCH"
            (cd "$SRC" && find . -type f -print0 | LC_ALL=C sort -z | xargs -0 sha256sum); } | sha256sum)
 ICA_INC=$(dirname "$(command -v iverilog 2>/dev/null || echo /usr/bin/iverilog)")/../include/iverilog
 M64=; [ "$(uname -m)" = x86_64 ] && M64=-m64
@@ -94,6 +96,10 @@ sed -i -E 's/^( *`define VProcTimeScale +)`timescale.*/\1/' "$OUT/hdl/extradefs.
 # VProc's Update flag: a plain non-blocking assignment (upstream: <= `MINDELAY,
 # #0 on all simulators but Verilator)
 sed -i -E 's/<= *`MINDELAY +/<= /' "$OUT/hdl/f_VProc.sv"
+# and its #0 before VInit (so that Node holds its value): a non-blocking
+# assignment whose edge calls VInit (1.upstream/patches/f_VProc-vinit.patch)
+patch -s --no-backup-if-mismatch -p1 -d "$OUT/hdl" < "$VINIT_PATCH" >&2
+if grep -n '^ *`MINDELAY' "$OUT/hdl/f_VProc.sv" >&2; then exit 1; fi
 
 # ---- mem_model: HDL only (its C model is part of pcieVHost) ------------------
 sed '/^`timescale/d' "$SRC/mem_model/f_mem_model.sv" > "$OUT/hdl/f_mem_model.sv"
@@ -118,6 +124,8 @@ lf "$P/verilog/test/test_defs.svh" > "$H/test_defs.svh"
 
 for f in pcieVHost.sv pcieVHostPipex1.sv; do lf "$PV/$f" > "$OUT/hdl/$f"; done
 for f in clkmux.sv Serialiser.sv; do lf "$PL/$f" > "$OUT/hdl/$f"; done
+# clkmux.sv's own self-test (`ifdef TEST, compiled by nobody) has unitless delays: drop it
+sed -i '/^`ifdef TEST/,/^`endif/d' "$OUT/hdl/clkmux.sv"
 # Plain non-blocking assignments and inputs: upstream's `RegDel on its
 # registers and `PcieVHostSampleDel on its inputs go, so no delay hides a
 # race at a clock edge

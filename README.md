@@ -108,7 +108,7 @@ How the model attaches to a design, what it exposes, how to build it: [integrati
 | `3.sw/a7rc/` | [the Artix-7 RC model and its 59 rules](3.sw/a7rc/README.md): `VUserMain2.cpp` (VProc node 2), its checker `a7rc_check.cpp`, `ep_dma.h` | BSD-3-Clause |
 | `3.sw/ltssm/` | the LTSSM helper both nodes link in: `ltssm.c` (ours), `ltssm.c.orig` (upstream), `ltssm-openpcie.patch` | GPL-3.0-or-later |
 | `1.upstream/` | [what we changed in upstream](1.upstream/README.md), and the issues fixed | BSD-3-Clause |
-| `1.upstream/patches/` | our changes to upstream: `pcievhost-taps.patch` (applied at import), `pcievhost-speed.patch`, `vproc-coroutine.patch` (applied at build) | GPL-3.0-or-later |
+| `1.upstream/patches/` | our changes to upstream: `pcievhost-taps.patch` (applied at import), `pcievhost-speed.patch`, `vproc-coroutine.patch`, `f_VProc-vinit.patch` (applied at build) | GPL-3.0-or-later |
 | `1.upstream/vip/` | upstream copies: VProc, pcieVHost, mem_model ([versions](1.upstream/vip/README.md)) | GPL-3.0-or-later |
 | `4.build/` | `vip-import.sh` (upstream to `1.upstream/vip/`), `build-vip.sh` (libraries and HDL), `regress.sh` (seeds), `wavecrux.py` (a run in WaveCrux at the first violation), `wavecrux-session.py` (a WaveCrux session for a dump), `lint.verible` (the lint rules) | BSD-3-Clause |
 | `5.sim-regression/` | the self-test: the RC model against the Endpoint model, back to back; sanity and regression lists | BSD-3-Clause |
