@@ -125,7 +125,8 @@ lf "$P/verilog/test/test_defs.svh" > "$H/test_defs.svh"
 for f in pcieVHost.sv pcieVHostPipex1.sv; do lf "$PV/$f" > "$OUT/hdl/$f"; done
 for f in clkmux.sv Serialiser.sv; do lf "$PL/$f" > "$OUT/hdl/$f"; done
 # clkmux.sv's own self-test (`ifdef TEST, compiled by nobody) has unitless delays: drop it
-sed -i '/^`ifdef TEST/,/^`endif/d' "$OUT/hdl/clkmux.sv"
+sed -i '/^`ifdef TEST$/,/^`endif/d' "$OUT/hdl/clkmux.sv"
+grep -q '^ *endmodule' "$OUT/hdl/clkmux.sv" || { echo "clkmux.sv: TEST block removal cut too far" >&2; exit 1; }
 # Plain non-blocking assignments and inputs: upstream's `RegDel on its
 # registers and `PcieVHostSampleDel on its inputs go, so no delay hides a
 # race at a clock edge

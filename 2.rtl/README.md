@@ -157,7 +157,7 @@ No `` `timescale `` in the HDL. The simulator command line gives it; 1ns/10ps he
 
 The models' delays carry units, so any unit works. Clocks set in ps are written `#(N * 1ns / 1000.0)`, not `#(N * 1ps)`: the standard rounds a time literal to the precision (IEEE 1800-2017 5.8), so at 10 ps `1ps` is 0 and the clock stops (Icarus and JanusHDL round; Verilator and XSIM do not). `4.build/build-vip.sh` empties upstream's `WsTimeScale` and `VProcTimeScale`.
 
-No `#` delay on register outputs or inputs: `build-vip.sh` removes upstream's `` #`RegDel `` (its registers), `` #`PcieVHostSampleDel `` (its link inputs) and VProc's `` <= `MINDELAY `` (`Update`). Plain non-blocking assignments, so no delay hides a race at a clock edge. Verilator also runs 2 to 3 times faster without them (self-test run: 1.53 s to 0.52 s at x1, 1.59 s to 0.72 s at x4); Icarus, XSIM and JanusHDL within 3%.
+No `#` delay on register outputs or inputs: `build-vip.sh` removes upstream's `` #`RegDel `` (its registers), `` #`PcieVHostSampleDel `` (its link inputs) and VProc's `` <= `MINDELAY `` (`Update`); VProc's `` `MINDELAY `` (`#0`) before `VInit` becomes a non-blocking assignment whose edge calls it (`1.upstream/patches/f_VProc-vinit.patch`). Plain non-blocking assignments, so no delay hides a race at a clock edge. Verilator also runs 2 to 3 times faster without them (self-test run: 1.53 s to 0.52 s at x1, 1.59 s to 0.72 s at x4); Icarus, XSIM and JanusHDL within 3%.
 
 ## Build defines
 
