@@ -229,6 +229,7 @@ The RC model is calibrated against the AMD (Xilinx) 7 Series `PCIE_2_1` hard mac
 - [openPCIE](https://github.com/chili-chips/openPCIE) and [openCologne-PCIE](https://github.com/chili-chips/openCologne-PCIE): the projects this model came from
 - [WaveCrux](https://wavecrux.app) and [wavecrux-decoders](https://github.com/Ferrite-Engineering/wavecrux-decoders), Ferrite Engineering: the waveform viewer and the PCIE protocol decoders we cross-check with
 - AMD (Xilinx) [UG477](https://docs.xilinx.com/v/u/en-US/ug477_7Series_IntBlock_PCIe): 7 Series FPGAs Integrated Block for PCI Express, the `PCIE_2_1` hard macro the RC model is calibrated against
+- [pci_eerie](https://github.com/regymm/pci_eerie), regymm: open-source PCIE EP core, plug-and-play compatible with the Xilinx `PCIE_2_1` HM; and its [GateMate port](https://github.com/goran-mahovlic/pci_eerie/tree/gatemate-w8/gatemate), Goran Mahovlić
 - [cocotbext-pcie](https://github.com/alexforencich/cocotbext-pcie), Alex Forencich: a PCIE transaction-level model for cocotb (Python), related work
 - [ngscopeclient](https://www.ngscopeclient.org): open-source signal analysis for oscilloscopes and logic analyzers, with protocol decoders
 
@@ -247,6 +248,9 @@ The RC model is calibrated against the AMD (Xilinx) 7 Series `PCIE_2_1` hard mac
 | Verilator | [verilator#9240](https://github.com/verilator/verilator/issues/9240), ours [#4](https://github.com/chili-chips/openPCIE_BFM/issues/4) | a time literal finer than the time precision is not rounded (`1ps` at 1ns/10ps); our clocks no longer depend on it | closed: Verilator keeps the literal, as XSIM does, and now warns (`TIMEPRECTRUNC`, on master, not yet released) |
 
 JanusHDL has no public tracker (closed source, so it can read encrypted IP): its issues are in our repos, under the [`JanusHDL` label](https://github.com/issues?q=org%3Achili-chips+label%3AJanusHDL).
+
+Our posts so far:
+- [2026-11-19, LinkedIn (pci_eerie)](https://lnkd.in/p/gkBUxmdS)
 
 ---
 ---
