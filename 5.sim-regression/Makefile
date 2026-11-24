@@ -307,8 +307,13 @@ regression:
 help:
 	@sed -n '/^# openPCIE_BFM/,/^# ====/p' Makefile
 
+.PHONY: cocotb
+.PHONY: cocotb
+cocotb:
+	@$(MAKE) -C cocotb sim
+
 clean:
-	@rm -rf $(WORK)
+	@rm -rf $(WORK) cocotb/results.xml
 
 # -----------------------------------------------------------------------------
 # Project:     openPCIE_BFM

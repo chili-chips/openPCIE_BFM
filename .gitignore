@@ -17,3 +17,8 @@ work/
 # draw.io auto-backups
 *.bkp
 .$*
+
+# Cocotb
+results.xml
+__pycache__/
+*.pyc
