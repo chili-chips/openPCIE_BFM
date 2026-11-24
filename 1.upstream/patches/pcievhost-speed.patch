@@ -1012,7 +1012,25 @@
  //
 --- a/src/displink.c
 +++ b/src/displink.c
-@@ -79,7 +79,7 @@
+@@ -60,11 +60,15 @@
+ // sequence number and LCRC) and each DLLP (its 4 bytes, without CRC) to the
+ // HDL tap addresses, in zero time. pcieVHost.v queues them and plays them
+ // out one DW per clock on its Tlp*/Dllp* ports. Nullified TLPs (EDB) are
+-// not tapped.
++// not tapped. Sent (rx false): from DispTl()/DispDll(), each transmission,
++// replays too. Received (rx true): from ProcessInput(), only what the Data
++// Link Layer takes: a good DLLP; a TLP with a good LCRC and the expected
++// sequence number, once (no duplicate, nullified or bad one), as a DLL
++// hands it to its Transaction Layer.
+ //
+ // -------------------------------------------------------------------------
+ 
+-static void TapTl(const pPcieModelState_t const state, const pPkt_t const pkt, const bool rx)
++void TapTl(const pPcieModelState_t const state, const pPkt_t const pkt, const bool rx)
+ {
+     int end, last, idx;
+ 
+@@ -79,7 +83,7 @@
  
      for (idx = 3; idx + 3 <= last; idx += 4)
      {
@@ -1021,16 +1039,19 @@
                        ((pkt->data[idx+2] & 0xff) <<  8) |  (pkt->data[idx+3] & 0xff);
          int      addr = (idx == 3)        ? (rx ? TAP_TLP_RX_SOP : TAP_TLP_TX_SOP) :
                          (idx + 3 == last) ? (rx ? TAP_TLP_RX_EOP : TAP_TLP_TX_EOP) :
-@@ -91,7 +91,7 @@
+@@ -89,9 +93,9 @@
+     }
+ }
  
- static void TapDll(const pPcieModelState_t const state, const pPkt_t const pkt, const bool rx)
+-static void TapDll(const pPcieModelState_t const state, const pPkt_t const pkt, const bool rx)
++void TapDll(const pPcieModelState_t const state, const pPkt_t const pkt, const bool rx)
  {
 -    uint32_t dw = ((pkt->data[1] & 0xff) << 24) | ((pkt->data[2] & 0xff) << 16) |
 +    uint32_t dw = ((uint32_t)(pkt->data[1] & 0xff) << 24) | ((pkt->data[2] & 0xff) << 16) |
                    ((pkt->data[3] & 0xff) <<  8) |  (pkt->data[4] & 0xff);
  
      VWrite(rx ? TAP_DLLP_RX : TAP_DLLP_TX, dw, 1, state->thisnode);
-@@ -261,7 +261,7 @@
+@@ -261,7 +265,7 @@
  
      for (idx = 0; idx < (4 * tl_length); idx += 4)
      {
@@ -1039,7 +1060,7 @@
  
          if (!((idx / 4) % 8))
              VPrint("%s: %s%s", prefixstr, tloffstr, fmtdatastr);
-@@ -305,6 +305,13 @@
+@@ -305,6 +309,13 @@
      exp_lcrc = ((uint32_t)pkt->data[lcrc_offset+0] << 24) | ((uint32_t)pkt->data[lcrc_offset+1] << 16) | ((uint32_t)pkt->data[lcrc_offset+2] << 8) | ((uint32_t)pkt->data[lcrc_offset+3]);
      got_lcrc = ((uint32_t)crc[0] << 24) | ((uint32_t)crc[1] << 16) | ((uint32_t)crc[2] << 8) | ((uint32_t)crc[3]);
  
@@ -1053,7 +1074,7 @@
      if (TLP_HAS_DIGEST(pkt->data))
      {
          unsigned ecrc_offset = lcrc_offset - 4;
-@@ -315,6 +322,10 @@
+@@ -315,6 +326,10 @@
          CalcEcrc(pkt->data);
          exp_ecrc = ((uint32_t)pkt->data[ecrc_offset+0] << 24) | ((uint32_t)pkt->data[ecrc_offset+1] << 16) | ((uint32_t)pkt->data[ecrc_offset+2] << 8) | ((uint32_t)pkt->data[ecrc_offset+3]);
          got_ecrc = ((uint32_t)ecrc[0] << 24) | ((uint32_t)ecrc[1] << 16) | ((uint32_t)ecrc[2] << 8) | ((uint32_t)ecrc[3]);
@@ -1064,7 +1085,25 @@
      }
  
      if (tl_td)
-@@ -608,8 +619,8 @@
+@@ -459,7 +474,7 @@
+     bool dllen   = IsDispEnabled(state, rx, DISPDL | DISPALL);
+     bool is_down = (rx && state->Endpoint) | (!rx && !state->Endpoint);
+ 
+-    TapDll(state, pkt, rx);
++    if (!rx) TapDll(state, pkt, rx);   // received: ProcessInput() taps the good ones
+ 
+     sprintf(prefixstr, "%sPCIE%s%d%s", is_down ? fmtdnstr : fmtupstr, is_down ? "D" : "U", rx ? state->usrconf.BackNodeNum : state->thisnode, fmtnormstr);
+ 
+@@ -575,7 +590,7 @@
+ 
+     int is_down = (rx && state->Endpoint) | (!rx && !state->Endpoint);
+ 
+-    TapTl(state, pkt, rx);
++    if (!rx) TapTl(state, pkt, rx);    // received: ProcessInput() taps the ones it takes
+ 
+     // Create marker suffix
+     sprintf(prefixstr, "%sPCIE%s%d%s", is_down ? fmtdnstr : fmtupstr, is_down ? "D" : "U", rx ? state->usrconf.BackNodeNum : state->thisnode, fmtnormstr);
+@@ -608,8 +623,8 @@
          uint32_t dllp_word   =  (pkt->data[1]  << 24) | (pkt->data[2]  << 16) | (pkt->data[3]  << 8) | (pkt->data[4]);
          uint32_t tl_word0    =  (pkt->data[3]  << 24) | (pkt->data[4]  << 16) | (pkt->data[5]  << 8) | (pkt->data[6]);
          uint32_t tl_word1    =  (pkt->data[7]  << 24) | (pkt->data[8]  << 16) | (pkt->data[9]  << 8) | (pkt->data[10]);
@@ -1380,7 +1419,7 @@
  // Returned completions get passed up to user registered
  // callback function.
  //
-@@ -502,6 +644,13 @@
+@@ -502,6 +644,50 @@
  
      // Set an optimistic packet status
      status = PKT_STATUS_GOOD;
@@ -1391,10 +1430,55 @@
 +    {
 +        (state->mon_cb)(pkt, 1, Edb, state->mon_usrptr);
 +    }
++
++    // openPCIE: a packet whose length does not match its framing (a line that
++    // slipped: a framing error, 4.2.2.2.1) is bad: a TLP is Naked, both are
++    // dropped. Upstream read the CRC where the header said, past the end of
++    // the packet, and crashed
++    {
++        bool dllp = pkt->seq == DLLP_SEQ_ID;
++        int  n    = 0;
++        while (pkt->data[n] != PKT_TERMINATION)
++        {
++            n++;
++        }
++        int want = dllp ? 8 : (n < 20) ? -1 :
++                   20 + 4 * (((pkt->data[TLP_TYPE_BYTE_OFFSET] & TL_TYPE_WRITE) ? GET_TLP_LENGTH(pkt->data) : 0) +
++                             TLP_HAS_DIGEST(pkt->data) + TLP_HDR_4DW(pkt->data));
++        if (n != want)
++        {
++            VPrint("ProcessInput: Info --- %s%s of %d symbols, its framing says %d%s at node %d\n", fmterrstr,
++                   dllp ? "DLLP" : "TLP", n, want, fmtnormstr, state->thisnode);
++            if (!dllp && !state->usrconf.DisableAck && !state->nak_scheduled)
++            {
++                SendNak ((state->next_rcv_seq - 1) & 0xfff, state->thisnode);
++                state->nak_scheduled = true;
++            }
++            CorrectableDetected(state);         // Bad TLP or Bad DLLP
++            if (state->vuser_cb != NULL)
++            {
++                (state->vuser_cb)(pkt, dllp ? PKT_STATUS_BAD_DLLP_CRC : PKT_STATUS_BAD_LCRC, state->usrptr);
++            }
++            else
++            {
++                CheckFree(pkt->data);
++                CheckFree(pkt);
++            }
++            return;
++        }
++    }
  
      // DLLP
      if (pkt->seq == DLLP_SEQ_ID)
-@@ -554,6 +703,7 @@
+@@ -519,6 +705,7 @@
+         // If good CRC ...
+         if (expcrc == gotcrc || state->usrconf.DisableCrcChk)
+         {
++            TapDll(state, pkt, true);           // openPCIE: the RX tap, good DLLPs only
+             type = pkt->data[1];
+             type &= (type & 0xc) ? 0xf8 : 0xff; // Mask VC bits for FC DLLPs
+             switch (type)
+@@ -554,6 +741,7 @@
                  }
                  break;
              case DL_UPDATEFC_P:
@@ -1402,7 +1486,7 @@
                  if (state->usrconf.DisableFc)
                  {
                      if (state->vuser_cb != NULL)
-@@ -570,6 +720,7 @@
+@@ -570,6 +758,7 @@
                  }
                  break;
              case DL_UPDATEFC_NP:
@@ -1410,7 +1494,7 @@
                  if (state->usrconf.DisableFc)
                  {
                      if (state->vuser_cb != NULL)
-@@ -586,6 +737,7 @@
+@@ -586,6 +775,7 @@
                  }
                  break;
              case DL_UPDATEFC_CPL:
@@ -1418,7 +1502,7 @@
                  if (state->usrconf.DisableFc)
                  {
                      if (state->vuser_cb != NULL)
-@@ -647,6 +799,7 @@
+@@ -647,6 +837,7 @@
          {
              DebugVPrint( "ProcessInput: Warning --- received bad DLLP on node %d\n", state->thisnode);
              status = PKT_STATUS_BAD_DLLP_CRC;
@@ -1426,7 +1510,7 @@
  
              // Return bad packet to user process, if one registered. Otherwise discard.
              if (state->vuser_cb != NULL)
-@@ -666,6 +819,10 @@
+@@ -666,6 +857,10 @@
          bool ecrc_present  = TLP_HAS_DIGEST(pkt->data);
          bool gen_cmpl_ecrc = ecrc_present && !state->usrconf.DisableEcrcCmpl;
  
@@ -1437,7 +1521,7 @@
          // Check LCRC
          lcrc_offset = 15 + 4 * ((has_data ? GET_TLP_LENGTH(pkt->data) : 0) + (ecrc_present ? 1 : 0) + TLP_HDR_4DW(pkt->data));
          crc[0] = pkt->data[lcrc_offset+0];
-@@ -703,10 +860,14 @@
+@@ -703,10 +898,14 @@
              else
              {
                  VPrint("ProcessInput: Info --- %sTlp LCRC failure%s. Sending NAK from node %d\n", fmterrstr, fmtnormstr, state->thisnode);
@@ -1454,7 +1538,7 @@
                  status |= PKT_STATUS_BAD_LCRC;
              }
  
-@@ -723,31 +884,63 @@
+@@ -723,31 +922,66 @@
              return;
          }
  
@@ -1515,6 +1599,9 @@
  
 -        // Good CRC, so send an Ack
 -        if (!state->usrconf.DisableAck)
++        // openPCIE: the RX tap, the TLP taken, as a DLL hands it to its TL
++        TapTl(state, pkt, true);
++
 +        // Check ECRC, if present
 +        if (!state->usrconf.DisableCrcChk &&
 +            (ecrc_present && (ecrc[0] != pkt->data[ecrc_offset+0] || ecrc[1] != pkt->data[ecrc_offset+1] ||
@@ -1531,7 +1618,7 @@
          // If mem write ...
          if (!state->usrconf.DisableMem && (type == TL_MWR32 || type == TL_MWR64))
          {
-@@ -768,7 +961,22 @@
+@@ -768,7 +1002,22 @@
              length     = GET_TLP_LENGTH(pkt->data);
  
              // Check if address is ok to to use
@@ -1555,7 +1642,7 @@
              {
                  pdata  = (type == TL_MWR32) ? &(pkt->data[TLP_DATA_OFFSET32]) : &(pkt->data[TLP_DATA_OFFSET64]);
                  fbe    = GET_TLP_FBE(pkt->data);
-@@ -808,7 +1016,14 @@
+@@ -808,7 +1057,14 @@
              tag        = GET_TLP_TAG(pkt->data);
  
              // Check address is good for an access
@@ -1571,7 +1658,7 @@
              {
                  if (ReadRamByteBlock (addr, buff, length*4, state->thisnode))
                  {
-@@ -817,10 +1032,29 @@
+@@ -817,10 +1073,29 @@
                  }
  
                  int rlen = (length ? length : MAX_PAYLOAD_BYTES/4);
@@ -1602,7 +1689,7 @@
                  PartCompletionLockDelay(0, NULL, CPL_UNSUPPORTED, 0x0, 0x0, 0, 0, tag, cid, rid, is_locked, gen_cmpl_ecrc, state->usrconf.CompletionRate, true, state->thisnode);
              }
  
-@@ -852,7 +1086,10 @@
+@@ -852,7 +1127,10 @@
  
          // Config reads and writes (for Endpoints only)
          }
@@ -1614,7 +1701,7 @@
          {
              addr   = (uint64_t)(pkt->data[TLP_ADDR_OFFSET]   << 24) | (uint64_t)(pkt->data[TLP_ADDR_OFFSET+1] << 16) |
                       (uint64_t)(pkt->data[TLP_ADDR_OFFSET+2] << 8)  | (uint64_t)(pkt->data[TLP_ADDR_OFFSET+3] << 0) ;
-@@ -863,13 +1100,28 @@
+@@ -863,17 +1141,35 @@
              cid               = state->CplId;
              tag               = GET_TLP_TAG(pkt->data);
  
@@ -1643,8 +1730,16 @@
 +            }
              else
              {
-                 // The device completer ID is always updated on config writes
-@@ -893,6 +1145,27 @@
+-                // The device completer ID is always updated on config writes
++                // The device completer ID is always updated on config writes.
++                // openPCIE: and this write's Completion carries the new one
++                // (2.2.6.2); upstream sent the ID from before it
+                 state->CplId = GET_CFG_CID(pkt->data);
++                cid          = state->CplId;
+                 WriteConfigSpaceBuf((uint32_t)(addr & 0xfff), pdata, fbe, 0, 4, true, state->thisnode);
+ 
+                 PartCompletionDelay(0, buff, CPL_SUCCESS, 0xf, 0x0, 0, 0, tag, cid, rid, gen_cmpl_ecrc, state->usrconf.CompletionRate, true, state->thisnode);
+@@ -893,6 +1189,27 @@
              cid = state->CplId;
              tag = GET_TLP_TAG(pkt->data);
  
@@ -1672,7 +1767,7 @@
              // Accesses, other than messages and memory write accesses, require a completion of some sort,
              // unless specifically disabled or internal memory disabled where all packets get sent to
              // any registered user callback function
-@@ -935,6 +1208,10 @@
+@@ -935,6 +1252,10 @@
                        const pLinkEventCount_t const linkevent, const int lane, const int type, const pTS_t const ts_data,
                        const os_callback_t cb, void* usrptr, const int node)
  {
@@ -1683,7 +1778,7 @@
      if (cb != NULL)
      {
          cb(type, lane, ts_data, usrptr);
-@@ -1050,8 +1327,10 @@
+@@ -1050,8 +1371,10 @@
  {
      pPkt_t pkt1, pkt2;
  
@@ -1696,7 +1791,7 @@
  
      if (pkt1->TimeStamp > pkt2->TimeStamp)
      {
-@@ -1062,7 +1341,8 @@
+@@ -1062,7 +1385,8 @@
          return (-1);
      }
  
@@ -1706,7 +1801,7 @@
  }
  
  // -------------------------------------------------------------------------
-@@ -1527,7 +1807,8 @@
+@@ -1527,7 +1851,8 @@
          // Header 3
          pmem[idx++] = 0;
          pmem[idx++] = 0;
@@ -1716,7 +1811,7 @@
          pmem[idx++] = (addr & ADDR_LO_BYTE_MASK);
  
          // Jump over payload and tail
-@@ -1716,7 +1997,27 @@
+@@ -1716,7 +2041,27 @@
      state->head_p        = state->send_p        = state->end_p = NULL;
      state->ack_to_send_p = state->nak_to_send_p = NULL;
      state->curr_ack      = state->curr_nak      = NULLACK;
@@ -1744,7 +1839,7 @@
  
      for (fc_vc = 0; fc_vc < NUM_VIRTUAL_CHANNELS; fc_vc++)
      {
-@@ -1821,8 +2122,20 @@
+@@ -1821,8 +2166,20 @@
      // Remove any previous linkage
      packet->NextPkt = NULL;
  
@@ -1767,7 +1862,7 @@
      {
          state->end_p = state->send_p = state->head_p = packet;
      // Queue has at least one packet
-@@ -1844,6 +2157,7 @@
+@@ -1844,6 +2201,7 @@
              state->NakHolder.NextPkt = packet;
          }
  
@@ -1775,7 +1870,7 @@
          // Point current end of queue NextPkt pointer to
          // the new packet, and then update end_p to the
          // added packet.
-@@ -1910,7 +2224,9 @@
+@@ -1910,7 +2268,9 @@
  
      for (idx = 0; idx < state->LinkWidth; idx++)
      {
@@ -1786,7 +1881,7 @@
  
          // ----- Extracting Ordered Sets/Training Sequences for each lane -----
  
-@@ -1986,6 +2302,19 @@
+@@ -1986,6 +2346,19 @@
                  case  5: linkevent->Tseq[idx].control  = linkin[idx];
                      break;
                  case  6: linkevent->Tseq[idx].id       = linkin[idx];
@@ -1806,7 +1901,7 @@
                      break;
                  case  7: case  8: case  9: case 10:
                  case 11: case 12: case 13: case 14: case 15:
-@@ -2069,12 +2398,18 @@
+@@ -2069,12 +2442,18 @@
                  pkt->data = state->pRxPktData;
                  pkt->seq  = (pkt->data[0] == SDP) ? DLLP_SEQ_ID : ((((pkt->data[1] & 0xff) << 8) | (pkt->data[2] & 0xff)) & 0xfff);
                  pkt->Retry = 0;
@@ -1826,7 +1921,7 @@
              }
          }
      }
-@@ -2107,29 +2442,65 @@
+@@ -2107,29 +2486,65 @@
  
  void TxFcInitInt (const pFlowControl_t const flw, const pUserConfig_t const usrcfg, const int node)
  {
@@ -1900,7 +1995,7 @@
          // Ensure that at least one InitFC2 set is transmitted, even if at INITFC_FI2 already
          if (flw->fc_state[0] == INITFC_FI2 && flw->fc_init_count[0] >= FC_INIT_SENT_MIN)
          {
-@@ -2148,6 +2519,11 @@
+@@ -2148,6 +2563,11 @@
      DebugVPrint("** Received InitFC type %d hdrval=%d dataval=%d rx_fc_state=%d fc_state=%d @ node %d\n",
              type, hdrval, dataval, flw->rx_fc_state[0], flw->fc_state[0], node);
  
@@ -3244,3 +3339,14 @@
  
      // Link lane output
      .LinkOut0              (LinkOut),
+--- a/src/displink.h
++++ b/src/displink.h
+@@ -130,6 +130,8 @@
+ void DispRaw          (const pPcieModelState_t const state,   const PktData_t *linkin, const int rx);
+ void DispOS           (const pPcieModelState_t const state,   const int          type, const pTS_t   const ts_data, const int lane, const bool rx, const int node);
+ void DispDll          (const pPcieModelState_t const state,   const pPkt_t const pkt,  const bool rx);
++void TapTl            (const pPcieModelState_t const state,   const pPkt_t const pkt,  const bool rx);  // openPCIE
++void TapDll           (const pPcieModelState_t const state,   const pPkt_t const pkt,  const bool rx);  // openPCIE
+ void DispTl           (const pPcieModelState_t const state,   const pPkt_t const pkt,  const bool rx);
+ 
+ #endif

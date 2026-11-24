@@ -75,6 +75,7 @@ extern "C"
 #define A7RC_ACK_TICKS        92    // Ack 98 symbol times after the TLP's END: with the link, the hard macro's 222 ns at Gen2 (make HM_PROBE=1)
 #define A7RC_ACK_TICKS_X4     64    // x4: under Table 3-6's 73 symbol times (Gen1; Gen2 124) with the Ack's own; the hard macro's not measured
 static int a7rc_ack_ticks = A7RC_ACK_TICKS;   // by the link's width (VUserMain2())
+static bool a7rc_x4       = false;            // a x4 link (VUserMain2())
 // Rates the RC advertises: 1 or 2 (make SIM_RC_GEN)
 #ifndef RC_GEN
 #define RC_GEN 2
@@ -88,6 +89,7 @@ static int a7rc_ack_ticks = A7RC_ACK_TICKS;   // by the link's width (VUserMain2
 // The tester: TS counts and idle times up to so many more than the least (SetLtssmVary())
 #define A7RC_VARY             8
 
+#define START_MAX_US          100   // the start-up offset, at most (seeds other than 1)
 #define A7RC_CFG_IDLE_TICKS   17    // L0 (InitLinkGen() returns) to the Configuration.Idle SKP
 #define A7RC_INITFC_TICKS     88    // then to the first InitFC: 657 ns after the last training TS
 #define A7RC_P_HDR_CR         32
@@ -230,7 +232,7 @@ static uint32_t Rand(const uint32_t n)
 enum
 {
     S_FW, S_CFG_RD, S_CFG_WR, S_B2B_WR, S_B2B_RD, S_FILL, S_MIX_WR, S_MIX_RD, S_MULTI_DW, S_PARTIAL_BE, S_AT_4KB,
-    S_GAP_NONE, S_GAP_RANDOM, S_BURST, S_OUT_MAX, S_UR_NP, S_UR_P, S_VDM1, S_ERR_CLR, S_ECRC, S_POISON, S_TC_ATTR, S_NAK, S_ACK_HOLD, S_BAD_LCRC, S_DUP, S_BAD_DLLP,
+    S_GAP_NONE, S_GAP_RANDOM, S_BURST, S_OUT_MAX, S_UR_NP, S_UR_P, S_VDM1, S_ERR_CLR, S_ECRC, S_POISON, S_TC_ATTR, S_NAK, S_ACK_HOLD, S_ACK_SLOW, S_BURST_WR, S_BURST_ROUND, S_BAD_LCRC, S_DUP, S_BAD_DLLP,
     S_DROP, S_NULLIFY, S_SEQ_SKIP, S_BAD_ECRC, S_ACK_UNSENT, S_EP_REQ, S_FC_HOLD,
     S_SPEED, S_RETRAIN, S_RETRAIN_SPEED,
     S_NUM
@@ -243,7 +245,7 @@ static const char *stim_name[S_NUM] =
     "mix: ending at a 4 KB boundary", "mix: no gap before", "mix: a random gap before", "mix: bursts (4-12, mostly reads)",
     "mix: most requests outstanding", "unsupported: non-posted (UR)",
     "unsupported: posted (dropped)", "vendor message type 1 (dropped)", "error status cleared (RW1C)", "ECRC (TD 1) requests",
-    "poisoned writes", "reads with TC 1-7, RO/NS", "Naks of good TLPs", "Acks held past the replay timer",
+    "poisoned writes", "reads with TC 1-7, RO/NS", "Naks of good TLPs", "Acks held past the replay timer", "Acks late within the limit", "posted burst: writes", "posted burst: rounds read back",
     "TLPs with a bad LCRC", "duplicate TLPs", "DLLPs with a bad CRC", "the endpoint's TLPs lost",
     "nullified TLPs", "sequence numbers skipped", "TLPs with a bad ECRC", "Acks for a TLP never sent", "the endpoint's requests (DMA)",
     "UpdateFCs held (credit starvation)", "speed changes, reads outstanding",
@@ -1031,6 +1033,127 @@ static void FaultReads(pcieModelClass *pcie, const int n, const char *what)
     }
 }
 
+//-------------------------------------------------------------
+// SlowAcks()
+//
+// The tester (not A7RC=1): the RC Acks late but within the Ack latency limit
+// (3/4 of Table 3-7's value), while SLOW_ACK_READS reads keep the endpoint's
+// Completions on the wire for longer than its replay timer. Every Ack
+// advances, so each must restart that timer (3.5.2.1): a replay is a
+// violation (DL.REPLAY)
+//-------------------------------------------------------------
+
+#define SLOW_ACK_READS        24
+
+static int FreeTag(void);
+
+static void SlowAcks(pcieModelClass *pcie)
+{
+    bool     x4    = a7rc_x4;
+    bool     gen2  = GetLinkSpeed(rc_node) == 2;
+    int      table = x4 ? (gen2 ? 124 : 73) : (gen2 ? 288 : 237);   // Ack latency, symbol times, MPS 128 (Table 3-7)
+    FaultMark("the RC Acks late, within the limit, with Completions outstanding");
+    pcie->configurePcie(CONFIG_ENABLE_ACK, 3 * table / 4);
+
+    uint32_t span = (bar_size[0] < EP_SCRATCH_BYTES) ? bar_size[0] : EP_SCRATCH_BYTES;   // filled by Mix()
+    int      len  = (span < 128) ? span : 128;                                          // a Completion each, MPS
+    int      tags[SLOW_ACK_READS];
+    uint32_t want = 0;
+    cpl_tag_seen  = 0;
+    for (int i = 0; i < SLOW_ACK_READS; i++)
+    {
+        tags[i] = FreeTag();
+        want   |= 1u << tags[i];
+        pcie->memRead(bar_base[0], len, tags[i], FW_REQUESTER_ID, SEND);
+    }
+    uint64_t sent_ns = GetLinkTimeNs(rc_node);
+    while ((cpl_tag_seen & want) != want && GetLinkTimeNs(rc_node) < sent_ns + FW_CPL_TIMEOUT_NS)
+    {
+        LinkIdle(1, rc_node);
+    }
+    for (int i = 0; i < SLOW_ACK_READS; i++)
+    {
+        if (!(cpl_tag_seen & (1u << tags[i])))
+        {
+            VPrint("**** ERROR: RC model: no Completion for a read with slow Acks (tag %d)\n", tags[i]);
+            errors++;
+        }
+    }
+    pcie->configurePcie(CONFIG_ENABLE_ACK, a7rc_ack_ticks);
+    LinkIdle(a7rc_ack_ticks + 100, rc_node);
+    stim[S_ACK_SLOW]++;
+}
+
+//-------------------------------------------------------------
+// Burst()
+//
+// The tester (not A7RC=1): burst_count posted 1-DW writes back to back over
+// BAR0's scratch span, as a hardware posted-write burst (make BURST=N,
+// A7RC_BURST; default BURST_COUNT). Only the endpoint's posted credits pace
+// them: its UpdateFCs must keep up (2.6.1). make BURST_ROUNDS=R: R rounds,
+// each but the last followed by a read (A7RC_BURST_ROUNDS; default 1), a
+// flood as on a hardware test. Then the span is read back; the checker
+// compares each read with the last write (TL.ORDER). The throughput probe
+// takes the first round
+//-------------------------------------------------------------
+
+#define BURST_COUNT           64
+
+static int burst_count  = BURST_COUNT;
+static int burst_rounds = 1;
+
+// One read of the span after the burst, waited for
+static void BurstRead(pcieModelClass *pcie, const uint32_t addr)
+{
+    int tag      = FreeTag();
+    cpl_tag_seen = 0;
+    pcie->memRead(addr, 16, tag, FW_REQUESTER_ID, SEND);
+    uint64_t sent_ns = GetLinkTimeNs(rc_node);
+    while (!(cpl_tag_seen & (1u << tag)) && GetLinkTimeNs(rc_node) < sent_ns + FW_CPL_TIMEOUT_NS)
+    {
+        LinkIdle(1, rc_node);
+    }
+    if (!(cpl_tag_seen & (1u << tag)))
+    {
+        VPrint("**** ERROR: RC model: no Completion for a read after the posted burst (tag %d)\n", tag);
+        errors++;
+    }
+}
+
+static void Burst(pcieModelClass *pcie)
+{
+    if (burst_count <= 0)
+    {
+        return;
+    }
+    uint32_t span = (bar_size[0] < EP_SCRATCH_BYTES) ? bar_size[0] : EP_SCRATCH_BYTES;
+    span          = (span < 128) ? span : 128;
+    FaultMark("the RC sends a burst of posted writes");
+    ChkBurst(true);                             // the probe: its throughput, until the writes are out
+    for (int round = 0, n = 0; round < burst_rounds; round++)
+    {
+        for (int i = 0; i < burst_count; i++, n++)
+        {
+            uint32_t  d      = (uint32_t)n * 0x9e3779b9u;
+            PktData_t buf[4] = {(PktData_t)(d >> 24), (PktData_t)((d >> 16) & 0xff), (PktData_t)((d >> 8) & 0xff),
+                                (PktData_t)(d & 0xff)};
+            pcie->memWrite(bar_base[0] + (4 * n) % span, buf, 4, 0, FW_REQUESTER_ID, SEND);
+            stim[S_BURST_WR]++;
+        }
+        if (round + 1 < burst_rounds)
+        {
+            BurstRead(pcie, bar_base[0] + (4 * (n - 1)) % span / 16 * 16);   // the round's last write, checked
+            ChkBurst(false);
+            stim[S_BURST_ROUND]++;
+        }
+    }
+    for (uint32_t off = 0; off < span; off += 16)
+    {
+        BurstRead(pcie, bar_base[0] + off);     // the first follows the last write onto the wire
+        ChkBurst(false);
+    }
+}
+
 static void Faults(pcieModelClass *pcie)
 {
     // Nak: the first of four Completions; the others follow it again
@@ -1493,6 +1616,21 @@ extern "C" void VUserMain2(int node)
     {
         VPrint("===> RC model: %d mix requests (make MIX=N)\n", mix_count);
     }
+
+    // Burst()'s length (make BURST=N; 0 skips it)
+    const char *burst_env = getenv("A7RC_BURST");
+    burst_count           = burst_env ? (int)strtol(burst_env, NULL, 10) : BURST_COUNT;
+    if (burst_count != BURST_COUNT)
+    {
+        VPrint("===> RC model: %d posted writes in the burst (make BURST=N)\n", burst_count);
+    }
+    const char *rounds_env = getenv("A7RC_BURST_ROUNDS");
+    burst_rounds           = rounds_env ? (int)strtol(rounds_env, NULL, 10) : 1;
+    burst_rounds           = (burst_rounds < 1) ? 1 : burst_rounds;
+    if (burst_rounds != 1)
+    {
+        VPrint("===> RC model: %d rounds of the burst (make BURST_ROUNDS=R)\n", burst_rounds);
+    }
 #endif
 
     // Electrically idle until Detect is done, as the Artix-7 RC; a PIPE link,
@@ -1533,8 +1671,20 @@ extern "C" void VUserMain2(int node)
     vp2->read(LANESADDR, &lanes);   // the wrapper's Lanes: make LANES (openPCIE: SIM_LANES)
     if (lanes == 4)
     {
+        a7rc_x4        = true;
         a7rc_ack_ticks = A7RC_ACK_TICKS_X4;
         pcie->configurePcie(CONFIG_ENABLE_ACK, a7rc_ack_ticks);
+    }
+
+    // The RC's Ack delay, in symbol times (make ACK=N, A7RC_ACK_TICKS): a
+    // slower host than the Artix-7 RC, up to past the Ack latency limit; the
+    // endpoint must cope, by its replay timer where Acks come too late
+    const char *ack_env = getenv("A7RC_ACK_TICKS");
+    if (ack_env && strtol(ack_env, NULL, 10) > 0)
+    {
+        a7rc_ack_ticks = (int)strtol(ack_env, NULL, 10);
+        pcie->configurePcie(CONFIG_ENABLE_ACK, a7rc_ack_ticks);
+        VPrint("===> RC model: Acks %d symbol times after a TLP (make ACK=N)\n", a7rc_ack_ticks);
     }
 
     do
@@ -1542,6 +1692,25 @@ extern "C" void VUserMain2(int node)
         pcie->sendOs(IDL);
     }
     while (InReset(vp2));
+
+    // Start-up offset: the RC stays electrically idle a while before it
+    // trains, so the endpoint waits in Detect, as when a host rescans a card
+    // already up. By seed (make SEED=N): 0 to START_MAX_US, none for seed 1,
+    // from a hash of the seed, so the stimulus after it is the seed's as
+    // before; make START_US=N (A7RC_START_US) sets it
+    {
+        const char *start_env = getenv("A7RC_START_US");
+        uint32_t    start_us  = (seed == 1) ? 0 : ((seed * 2654435761u) >> 16) % (START_MAX_US + 1);
+        if (start_env && *start_env)
+        {
+            start_us = strtoul(start_env, NULL, 10);
+        }
+        if (start_us)
+        {
+            VPrint("===> RC model: electrically idle %u us before it trains (make SEED=N, START_US=N)\n", start_us);
+            pcie->sendIdle(start_us * 250);     // symbol times at 2.5 GT/s
+        }
+    }
 
     // Train the link, x1 or x4 at Gen1, advertising the rates up to make
     // SIM_RC_GEN (RC_GEN), then bring up flow control a little later, as the
@@ -1584,6 +1753,8 @@ extern "C" void VUserMain2(int node)
         CfgSweep(pcie);
         Stress(pcie, FW_WINDOW_BASE);    // BAR0, as Firmware() checked
         Mix(pcie);
+        SlowAcks(pcie);
+        Burst(pcie);
 #ifndef HM_PROBE                         // make HM_PROBE=1 RC=model: the endpoint puts the faults
         Unsupported(pcie);
         Odd(pcie);

@@ -18,30 +18,19 @@
 //          |   a line per lane each way: 2.5 or 5 Gb/s
 //        u_ep  PcieVhostSerial, EndPoint = 1   <-- the endpoint model, node 1
 //
-//   Each side has its own clocks: the endpoint's are `SIM_PPM ppm off the
-//   RC's (make PPM; + faster), as two boards with their own reference
-//   clocks (SRNS). `SIM_RX_RETIME (make RETIME, default 1): the receivers
+//   Each side has its own clocks: the endpoint's are PPM ppm off the RC's
+//   (make PPM; + faster), as two boards with their own reference clocks
+//   (SRNS). RX_RETIME (make RETIME, default 1): the receivers
 //   recover the bits from the line and keep a SKP buffer (Serialiser,
 //   RX_RETIME); 0: they sample on their own clock, and with PPM not 0 the
 //   link fails. The endpoint drives each lane as a pair: its N
 //   (LinkOutN) is the inverse of P, or 0 with it in electrical idle.
 //
 //   The run ends when the RC model has checked the endpoint (RC MODEL
-//   RESULT), or at the time limit `RUN_US.
+//   RESULT), or at the time limit RUN_US. Every setting is a parameter (the
+//   Makefile sets them per simulator); no macros.
 //==========================================================================
 
-`ifndef SIM_LANES
-`define SIM_LANES 1
-`endif
-`ifndef RUN_US
-`define RUN_US 2000
-`endif
-`ifndef SIM_PPM
-`define SIM_PPM 0
-`endif
-`ifndef SIM_RX_RETIME
-`define SIM_RX_RETIME 1
-`endif
 
 // One side's clocks, PPM off nominal: the Gen2 bit clock (5 GHz; the
 // wrapper halves it at Gen1) and the symbol clock, a tenth of it. Each edge
@@ -71,25 +60,34 @@ module tb_ser_clocks #(
 
 endmodule : tb_ser_clocks
 
-module tb;
+// The file holds tb, as tb.sv: every simulator's top is tb (Makefile)
+// verilog_lint: waive module-filename
+module tb #(
+    parameter int  LANES     = 1,     // make LANES: 1 or 4
+    parameter int  RUN_US    = 2000,  // make RUN_US: the time limit
+    parameter real PPM       = 0.0,   // make PPM: the endpoint's clocks, ppm off the RC's
+    parameter int  RX_RETIME = 1,     // make RETIME: the receivers recover the bits
+    parameter bit  WAVES     = 0,     // make WAVES=1: the waveform
+    parameter bit  WAVES_VCD = 0      // ... as VCD (XSIM, JanusHDL), else FST
+);
 
-  localparam int L = `SIM_LANES;  // make LANES: 1 or 4
+  localparam int L = LANES;
 
   bit rc_serclk, rc_clk, ep_serclk, ep_clk;
   bit nreset;     // PERST#: the RC model
   bit ep_nreset;  // the endpoint, a little later
 
   tb_ser_clocks #(.PPM(0.0))      u_rc_clk (.serclk(rc_serclk), .clk(rc_clk));
-  tb_ser_clocks #(.PPM(`SIM_PPM)) u_ep_clk (.serclk(ep_serclk), .clk(ep_clk));
+  tb_ser_clocks #(.PPM(PPM))      u_ep_clk (.serclk(ep_serclk), .clk(ep_clk));
 
   initial begin
     nreset    = 1'b0;
     ep_nreset = 1'b0;
-    $display("tb_serial: %0d lane(s), endpoint %0d ppm, RX_RETIME %0d", L, `SIM_PPM, `SIM_RX_RETIME);
+    $display("tb_serial: %0d lane(s), endpoint %0.0f ppm, RX_RETIME %0d", L, PPM, RX_RETIME);
     #(1us) nreset <= 1'b1;
     #(487ns) ep_nreset <= 1'b1;
-    #(`RUN_US * 1us - 1us - 487ns);
-    $fatal(1, "time limit of %0d us: no RC MODEL RESULT", `RUN_US);
+    #(RUN_US * 1us - 1us - 487ns);
+    $fatal(1, "time limit of %0d us: no RC MODEL RESULT", RUN_US);
   end
 
   //------------------------------------------------------------------------
@@ -130,7 +128,7 @@ module tb;
       .NodeNum   (2),             // 3.sw/a7rc/VUserMain2.cpp: the Artix-7 RC model
       .EndPoint  (0),
       .Gen2Clk   (1),
-      .RX_RETIME (`SIM_RX_RETIME)
+      .RX_RETIME (RX_RETIME)
   ) u_rc (
       .Clk       (rc_clk),
       .SerClk    (rc_serclk),
@@ -153,7 +151,7 @@ module tb;
       .NodeNum   (1),             // usercode/VUserMain1.cpp: the endpoint
       .EndPoint  (1),
       .Gen2Clk   (1),
-      .RX_RETIME (`SIM_RX_RETIME)
+      .RX_RETIME (RX_RETIME)
   ) u_ep (
       .Clk       (ep_clk),
       .SerClk    (ep_serclk),
@@ -171,16 +169,12 @@ module tb;
       .LinkOutN  (ep_out_n)
   );
 
-`ifdef WAVES
-  initial begin
-`ifdef WAVES_VCD
-    $dumpfile("tb.vcd");
-`else
-    $dumpfile("tb.fst");
-`endif
-    $dumpvars(1, tb);
-  end
-`endif
+  if (WAVES) begin : g_dump
+    initial begin
+      $dumpfile(WAVES_VCD ? "tb.vcd" : "tb.fst");
+      $dumpvars(1, tb);
+    end
+  end : g_dump
 
 
 endmodule : tb

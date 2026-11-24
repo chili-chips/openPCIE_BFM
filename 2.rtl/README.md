@@ -18,7 +18,7 @@ The SerDes BFM stays below all three, at the level of the GateMate silicon.
 
 Each pcieVHost reports every TLP and DLLP it sends and receives on ports of its own: transaction taps we added to the model (openPCIE_BFM's `1.upstream/patches/pcievhost-taps.patch`).
 
-- **C side** (`src/displink.c`): `TapTl()` / `TapDll()`, called from `DispTl()` / `DispDll()`, write each TLP DW and each DLLP word to new addresses in `src/pcie_vhost_map.h`, with VProc delta writes, so no simulation time passes.
+- **C side** (`src/displink.c`): `TapTl()` / `TapDll()` write each TLP DW and each DLLP word to new addresses in `src/pcie_vhost_map.h`, with VProc delta writes, so no simulation time passes. Sent: from `DispTl()` / `DispDll()`, each transmission, replays too. Received: from `ProcessInput()`, only what the Data Link Layer takes: a good DLLP, and a TLP with a good LCRC and the expected sequence number, once.
 - **HDL side** (`pcieVHost.sv`): SystemVerilog queues play those words out one per clock on `TlpTx*` / `TlpRx*` (`Data`, `Sop`, `Eop`, `Valid`) and `DllpTx*` / `DllpRx*` (`Data`, `Valid`). `pcieVHostPipex1.sv` passes them through.
 - **TLP format:** byte 0 in bits 31:24, no framing, sequence number or LCRC. Nullified TLPs (EDB) are left out. DLLPs carry their 4 bytes, no CRC.
 - Our wrappers `PIPExN__pcieVHost` and `PIPEx1__pcieVHost` offer each packet at three layers, from one run, all always present.
@@ -30,7 +30,7 @@ Diagram: [Integration, in the top README](../README.md#integration).
 | Layer | Ports of `tb.u_rc`, `tb.u_ep` | For |
 |---|---|---|
 | PIPE | `pipe_dn_*`, `pipe_up_*` (`pclk`, `data`, `datak`) | the link; PIPE and DLL decoders |
-| Data Link | `dll_rx_*`, on `dll_clk`: TLPs (`data`, `tlp_valid`, `tlp_first`, `tlp_last`) and DLLPs (`hdr_credit`, `data_credit`, `update_type`, `packet_type`, `dllp_valid`) | RC -> EP traffic as an EP's DLL hands it to its TL (`dll_if` RX side): drives a TL under test |
+| Data Link | `dll_rx_*`, on `dll_clk`: TLPs (`data`, `tlp_valid`, `tlp_first`, `tlp_last`) and DLLPs (`hdr_credit`, `data_credit`, `update_type`, `packet_type`, `dllp_valid`) | RC -> EP traffic. On the EP model (`tb.dut.bfm_pcie` in openCologne-PCIE), as its DLL hands it to its TL (`dll_if` RX side), no replay, bad or duplicate TLP: drives a TL under test. On the RC, as sent, replays too |
 | Data Link | `dllp_dn_*`, `dllp_up_*` | every DLLP, one word each |
 | Transaction | `tx_*` (RC -> EP), `rx_*` (EP -> RC) | the TLP decoder |
 
@@ -38,7 +38,7 @@ The `dll_rx_*` fields follow the DLL ([DLL draft v2](https://github.com/chili-ch
 
 What it gives us:
 
-- **RTL driven from the model.** `dll_rx_*` has the shape of `dll_if`'s RX side, so a TL can be tested without the MAC and DLL below it, on its own clock.
+- **RTL driven from the model.** `dll_rx_*` has the shape of `dll_if`'s RX side, so a TL can be tested without the MAC and DLL below it, on its own clock: openCologne-PCIE's `make TL=1` runs its TL beside the EP model, fed from the EP model's taps, its completions checked against the model's.
 - **A reference for the DUT.** What the host sent and received, packet by packet, to compare against the DUT's own TL and DLL interfaces (in openCologne-PCIE: `make EP=rtl`).
 - **Self-checking tests.** A checker reads the taps, not the console log.
 - **Decoder fixtures from an open simulator.** Verilator and Icarus give the same TLPs at the same times (50 each way in the enumeration run), with expected values from the model, not from a decoder.

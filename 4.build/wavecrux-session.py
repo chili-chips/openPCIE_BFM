@@ -24,7 +24,9 @@ import subprocess
 import sys
 
 DN, UP, CTL = 4283417591, 4294948685, 4294962776   # ARGB: #4FC3F7, #FFB74D, #FFF176
-RC = 'tb.u_rc.'                                     # the RC wrapper's taps (2.rtl/PIPExN__pcieVHost.sv)
+RC = 'tb.g_xn.u_rc.'                                # the RC wrapper's taps (2.rtl/PIPExN__pcieVHost.sv)
+RC_ALT = ('tb.g_x1.u_rc.', 'tb.u_rc.')              # ... make WRAP=x1 (tb.sv), IFACE=serial (tb_serial.sv)
+VIEW = 'tb.g_view.pipe_view.'                       # the four lanes (2.rtl/pipe_x4_view.sv)
 PIPE_PAR = {'scrambling': 'auto', 'sample_point': 'before_edge'}
 X4_PAR = {'max_skew': 8, 'lane_order': 'auto'}      # the EP reverses its lanes (LANE_REV_EP)
 
@@ -33,13 +35,13 @@ def pipe_rows(x4):
     if not x4:
         return [(RC + 'pipe_dn_data', DN), (RC + 'pipe_dn_datak', DN),
                 (RC + 'pipe_up_data', UP), (RC + 'pipe_up_datak', UP)]
-    v = 'tb.pipe_view.'
+    v = VIEW
     return ([(v + 'pipe_dn_data' + s, DN) for s in ('', '1', '2', '3')]
             + [(v + 'pipe_up_data' + s, UP) for s in ('', '1', '2', '3')])
 
 
 def pipe_bind(x4, d):
-    p = (RC if not x4 else 'tb.pipe_view.') + 'pipe_' + d + '_'
+    p = (RC if not x4 else VIEW) + 'pipe_' + d + '_'
     b = {'pclk': p + 'pclk', 'data': p + 'data', 'datak': p + 'datak'}
     if x4:
         for l in ('1', '2', '3'):
@@ -112,7 +114,15 @@ def main():
     name, fst, out = sys.argv[1:]
     rows, decs = LAYOUTS[name]
     refs = fst_refs(fst)
-    rows = [(p, c) for p, c in rows if p in refs or p not in OPTIONAL]
+    # the same taps elsewhere: g_x1 (make WRAP=x1), or tb.u_rc (IFACE=serial)
+    rc = RC
+    if not any(r.startswith(RC) for r in refs):
+        rc = next((a for a in RC_ALT if any(r.startswith(a) for r in refs)), RC)
+    if rc != RC:
+        rows = [(x.replace(RC, rc), c) for x, c in rows]
+        decs = [(i, n, {k: v.replace(RC, rc) for k, v in b.items()}, par) for i, n, b, par in decs]
+    opt  = {o.replace(RC, rc) for o in OPTIONAL}
+    rows = [(p, c) for p, c in rows if p in refs or p not in opt]
     missing = sorted(({p for p, _ in rows} | {p for d in decs for p in d[2].values()}) - set(refs))
     if missing:
         sys.exit('wavecrux-session.py: not in %s: %s' % (fst, ', '.join(missing)))

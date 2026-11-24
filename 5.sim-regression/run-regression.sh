@@ -77,12 +77,12 @@ r=$(grep -a 'seeds failed$' $LOG/regress.log)
 case "$r" in "0 of "*) ok=1;; *) ok=0;; esac
 report regress $((SECONDS - t0)) $ok "regress SIM=verilator SEEDS=10" "$r; $(grep -a 'checked in no seed' $LOG/regress.log)"
 
-# Sustained load (make MIX=N): 1000 mix requests on the serial line at +300 ppm
+# Sustained load (make MIX=N, BURST=N): 1000 mix requests and 2400 posted writes on the serial line at +300 ppm
 t0=$SECONDS
-make --no-print-directory run SIM=verilator IFACE=serial PPM=300 MIX=1000 "$@" > $LOG/load.log 2>&1
+make --no-print-directory run SIM=verilator IFACE=serial PPM=300 MIX=1000 BURST=2400 "$@" > $LOG/load.log 2>&1
 r=$(grep -a -m1 'RC MODEL RESULT\|time limit' $LOG/load.log)
 case "$r" in *"RESULT: PASS"*) ok=1;; *) ok=0;; esac
-report load $((SECONDS - t0)) $ok "IFACE=serial PPM=300 MIX=1000" "${r:-no result}"
+report load $((SECONDS - t0)) $ok "IFACE=serial PPM=300 MIX=1000 BURST=2400" "${r:-no result}"
 
 # The checker against broken endpoints (../4.build/mutants.py)
 t0=$SECONDS

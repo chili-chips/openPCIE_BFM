@@ -33,6 +33,10 @@
 # MIX    the tester's random mix: N writes and reads (default 64), read at
 #        run time; sustained load, as on hardware. About 0.4 us a request:
 #        MIX=1000 ends at 890 us; above MIX=3000 raise RUN_US
+# BURST  the tester's posted burst: N 1-DW writes back to back (default 64;
+#        0 skips it), read at run time
+# BURST_ROUNDS  R rounds of the burst, each read back (default 1)
+# ACK    the RC's Ack delay, symbol times (default: the profile's, 92 at x1)
 # RUN_US time limit in us (default 2000)
 # SEEDS  make regress: seeds 1 to SEEDS (default 10), REGRESS_JOBS at a time
 #        (default 4), by ../4.build/regress.sh; Verilator or Icarus
@@ -53,6 +57,14 @@ PHY    ?= none
 A7RC   ?= 0
 SEED   ?= 1
 MIX    ?= 64
+BURST  ?= 64
+export A7RC_BURST = $(BURST)
+BURST_ROUNDS ?= 1
+export A7RC_BURST_ROUNDS = $(BURST_ROUNDS)
+ACK    ?=
+START_US ?=
+export A7RC_START_US = $(START_US)
+export A7RC_ACK_TICKS = $(ACK)
 RUN_US ?= 2000
 WAVES  ?= 0
 IFACE  ?= pipe
@@ -166,16 +178,19 @@ HDL_SRC     = $(BFM)/2.rtl/openPCIE_BFM_pkg.sv \
 # (Verilator --timescale, Icarus +timescale+ in a command file, xelab
 # --timescale, JanusHDL --timescale). The models' delays carry units.
 TIMESCALE   = 1ns/10ps
-HDL_DEFS    = SIM_LANES=$(LANES) RUN_US=$(RUN_US) $(if $(filter core,$(PHY)),SIM_PIPE_PHY) \
-              $(if $(filter x1,$(WRAP)),SIM_PIPEX1) $(WAVES_DEFS) \
-              $(if $(filter serial,$(IFACE)),SIM_PPM=$(PPM) SIM_RX_RETIME=$(RETIME))
+# The bench's parameters, name=value, each simulator's way (no macros): only
+# those the bench has, tb.sv (PIPE) or tb_serial.sv (IFACE=serial)
+TB_PARAMS   = LANES=$(LANES) RUN_US=$(RUN_US) $(WAVES_PARAMS) \
+              $(if $(filter serial,$(IFACE)),PPM=$(PPM) RX_RETIME=$(RETIME), \
+                PHY=$(if $(filter core,$(PHY)),1,0) X1=$(if $(filter x1,$(WRAP)),1,0))
 
 # make WAVES=1: the dump in tb.sv; Verilator and Icarus write FST, XSIM and
 # JanusHDL VCD (converted by vcd2fst)
 WAVES_ON    = $(filter 1,$(WAVES))
 WAVES_X4    = $(and $(WAVES_ON),$(filter 4,$(LANES)))
 WAVES_VCD   = $(and $(WAVES_ON),$(filter xsim janushdl,$(SIM)))
-WAVES_DEFS  = $(if $(WAVES_ON),WAVES) $(if $(WAVES_X4),WAVES_X4) $(if $(WAVES_VCD),WAVES_VCD)
+WAVES_PARAMS = $(if $(WAVES_ON),WAVES=1 $(if $(WAVES_VCD),WAVES_VCD=1) \
+               $(if $(and $(WAVES_X4),$(filter-out serial,$(IFACE))),WAVES_X4=1))
 VCD2FST    ?= vcd2fst
 PYTHON     ?= python3
 
@@ -208,7 +223,7 @@ $(SIMEXE): $(USERLIB) FORCE
 	@[ $(USERLIB) -nt $@ ] && rm -f $@; true
 	@$(VERILATOR) --binary -sv --timing --timescale $(TIMESCALE) --top-module tb -Mdir $(OBJDIR) $(if $(WAVES_ON),--trace-fst) \
 	    -Wno-fatal -Wno-WIDTH -Wno-lint -Wno-style \
-	    $(addprefix +define+,$(HDL_DEFS)) $(HDL_SRC) \
+	    $(addprefix -G,$(TB_PARAMS)) $(HDL_SRC) \
 	    -MAKEFLAGS "--quiet CFG_LDFLAGS_VERILATED=" -CFLAGS "$(CPPSTD) -Wno-attributes" \
 	    -LDFLAGS "-Wl,-whole-archive $(USERLIB) -Wl,-no-whole-archive -L$(VIP_DIR)/lib -lcosimlnx -lpcielnx -lpthread -lrt -ldl -rdynamic"
 SIM_CMD     = $(SIMEXE)
@@ -224,7 +239,7 @@ $(OBJDIR)/VProc.vpi: $(USERLIB)
 	    -L$(ICA_LIB) -lvpi -lrt -ldl
 $(SIMEXE): $(OBJDIR)/VProc.vpi FORCE
 	@echo '+timescale+$(TIMESCALE)' > $(OBJDIR)/timescale.f
-	@$(IVERILOG) -g2012 -c $(OBJDIR)/timescale.f -o $@ -s tb $(addprefix -D,$(HDL_DEFS)) $(HDL_SRC)
+	@$(IVERILOG) -g2012 -c $(OBJDIR)/timescale.f -o $@ -s tb $(addprefix -Ptb.,$(TB_PARAMS)) $(HDL_SRC)
 SIM_CMD     = $(VVP) -n -M $(OBJDIR) -m VProc $(SIMEXE) $(if $(WAVES_ON),-fst)
 endif
 
@@ -240,8 +255,8 @@ endif
 ifeq ($(SIM),xsim)
 SIMEXE      = $(OBJDIR)/xsim.dir/tb/xsimk
 $(SIMEXE): $(OBJDIR)/VProc.so FORCE
-	@cd $(OBJDIR) && $(XVLOG) -sv --nolog $(addprefix --define ,$(HDL_DEFS)) $(HDL_SRC) > xvlog.out || { cat xvlog.out; exit 1; }
-	@cd $(OBJDIR) && $(XELAB) --nolog -sv_root $(OBJDIR) -sv_lib VProc --timescale $(TIMESCALE) $(if $(WAVES_ON),--debug typical) \
+	@cd $(OBJDIR) && $(XVLOG) -sv --nolog $(HDL_SRC) > xvlog.out || { cat xvlog.out; exit 1; }
+	@cd $(OBJDIR) && $(XELAB) --nolog -sv_root $(OBJDIR) -sv_lib VProc --timescale $(TIMESCALE) $(if $(WAVES_ON),--debug typical) $(foreach p,$(TB_PARAMS),-generic_top $(p)) \
 	    --snapshot tb work.tb > xelab.out || { cat xelab.out; exit 1; }
 SIM_CMD     = $(XSIM) --nolog -R tb
 endif
@@ -249,7 +264,7 @@ endif
 # JanusHDL compiles the sources at each run
 ifeq ($(SIM),janushdl)
 SIMEXE      = $(OBJDIR)/VProc.so
-SIM_CMD     = $(JHDL) --top tb --timescale $(TIMESCALE) $(addprefix +define+,$(HDL_DEFS)) $(HDL_SRC) \
+SIM_CMD     = $(JHDL) --top tb --timescale $(TIMESCALE) $(addprefix -g,$(TB_PARAMS)) $(HDL_SRC) \
               --sv-lib $(OBJDIR)/VProc.so
 endif
 
@@ -267,7 +282,8 @@ run: all
 	  mkdir -p $(WORK)/waves; \
 	  if [ -n "$(WAVES_VCD)" ]; then timeout 600 $(VCD2FST) tb.vcd $(WAVES_OUT).fst > /dev/null && rm -f tb.vcd; \
 	  else mv -f tb.fst $(WAVES_OUT).fst; fi; \
-	  $(PYTHON) $(BFM)/4.build/wavecrux-session.py x$(LANES) $(WAVES_OUT).fst $(WAVES_OUT).wavecrux || r=1; \
+	  $(if $(filter serial,$(IFACE)),: no session: PcieVhostSerial has no taps;) \
+	  $(if $(filter serial,$(IFACE)),,$(PYTHON) $(BFM)/4.build/wavecrux-session.py x$(LANES) $(WAVES_OUT).fst $(WAVES_OUT).wavecrux || r=1;) \
 	fi; exit $$r
 
 # Every simulator in turn, one line each: result and wall time

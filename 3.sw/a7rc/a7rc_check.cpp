@@ -240,6 +240,7 @@ static uint64_t rc_tx_wall[4096];       // ... and when, in link time (the probe
 static uint64_t ep_tx_ns[4096];         // endpoint TLPs: when each last went out
 static int      ep_acked      = 0xfff;  // ... the last the RC Acked, and when that advanced
 static uint64_t ep_ack_ns     = 0;
+static uint64_t ep_ack_prev_ns = 0;     // ... and the advance before it
 static int      ep_last_rpl   = -1;     // ... the last one sent again
 static bool     rc_nak_owed   = false;  // the RC Naked, the replay not yet started
 static uint64_t rc_nak_ns     = 0;      // ... when
@@ -272,6 +273,11 @@ static Probe    pr_dup_ack;             // a duplicate: to its Ack
 static Probe    pr_nak_rpl;             // the RC's Nak: to the replay
 static Probe    pr_timer[2];            // no Nak: the replay timer, from its start to the replay, Gen1 and Gen2
 static Probe    pr_fc;                  // UpdateFC period, finite types
+static Probe    pr_rd_lat;              // the RC's memory read to its first Completion (min: a single read)
+static bool     pr_burst_on    = false; // the RC's posted burst (ChkBurst()): its writes after the first,
+static unsigned pr_burst_n     = 0;     // ... their payload and symbols, and the first and last END
+static uint64_t pr_burst_bytes = 0, pr_burst_sym = 0, pr_burst_first = 0, pr_burst_last = 0;
+static int      pr_burst_gen   = 1;
 
 // The RC's injected faults (ChkFault()): armed, then the TLP they hit
 static int      rc_fault_arm  = 0;
@@ -323,6 +329,8 @@ struct Req
                                         // or a byte the read did not enable)
     std::vector<std::vector<uint8_t>> alt;  // and every value written after it (a write may pass the read)
     bool     expect_ur;                 // the stimulus sent it as an Unsupported Request
+    uint64_t sent_l0, sent_wall;        // memory reads: when it went out (L0 time, link time), for the probe
+    bool     lat_open;                  // ... its first Completion not yet in
 };
 
 static Req      req[256];
@@ -788,6 +796,9 @@ static void TxRequest(const PktData_t *d)
     r.expect_ur = ur_next[H(d, 6)];
     ur_next[H(d, 6)] = false;
     r.kind    = kind;
+    r.sent_l0   = L0Now();
+    r.sent_wall = Now();
+    r.lat_open  = kind == REQ_MEM_RD;
     r.cfg     = type == 0x04 || type == 0x05;
     r.rid     = (H(d, 4) << 8) | H(d, 5);
     r.tc      = (H(d, 1) >> 4) & 7;
@@ -1292,6 +1303,16 @@ static void RxCpl(const PktData_t *d)
         return;
     }
 
+    // The probe: a memory read's END to its first Completion's END, in L0 all along
+    if (r.lat_open)
+    {
+        if (GetLtssmState(chk_node) == CHK_LTSSM_L0 && GetLtssmL0Ns(chk_node) <= r.sent_wall)
+        {
+            pr_rd_lat.add(L0Now() - r.sent_l0);
+        }
+        r.lat_open = false;
+    }
+
     // Completer ID: the bus/device captured from the last Type 0 CfgWr, or
     // from the one this completes
     int bus = cid >> 8, dev = (cid >> 3) & 0x1f;
@@ -1536,7 +1557,11 @@ static void RxTlp(const pPkt_t pkt, const int edb)
                   "a replay from TLP %d, the oldest unAcked %d", seq, (ep_acked + 1) & 0xfff);
             ep_rpl_runs++;
             rc_nak_owed    = false;
-            uint64_t start = (ep_tx_ns[seq] > ep_ack_ns) ? ep_tx_ns[seq] : ep_ack_ns;
+            // timed from its transmission or the last Ack that advanced; an Ack
+            // still on its way (the link and a TLP) has not restarted the
+            // endpoint's timer yet, so the one before it counts
+            uint64_t ack   = fresh ? ep_ack_prev_ns : ep_ack_ns;
+            uint64_t start = (ep_tx_ns[seq] > ack) ? ep_tx_ns[seq] : ack;
             uint64_t since = L0Now() - start;
             uint64_t timer = (GetLinkSpeed(chk_node) == 2) ? CHK_REPLAY_GEN2_SYM * 2 : CHK_REPLAY_GEN1_SYM * 4;
             // not before the timer (-0%), and not after twice it (+100%), with
@@ -1634,9 +1659,10 @@ static void TxPkt(const pPkt_t pkt)
             // Ack and Nak both acknowledge up to a
             if (a != ep_acked && NotBehind(a, ep_acked, 4096))
             {
-                ep_acked_prev = ep_acked;
-                ep_acked      = a;
-                ep_ack_ns     = L0Now();
+                ep_acked_prev  = ep_acked;
+                ep_acked       = a;
+                ep_ack_prev_ns = ep_ack_ns;
+                ep_ack_ns      = L0Now();
             }
         }
         else if (base == DL_INITFC2_P || base == DL_INITFC2_NP || base == DL_INITFC2_CPL)
@@ -1691,6 +1717,27 @@ static void TxPkt(const pPkt_t pkt)
         rc_cons_data[t] += TlpDataCredits(d);
         rc_last_seq      = seq;
         TxRequest(d);
+
+        // The posted-write probe (ChkBurst()): the burst's new MWr, each at its END
+        if (pr_burst_on && (H(d, 0) & 0xdf) == 0x40)
+        {
+            uint32_t sym = 0;
+            while (d[sym] != PKT_TERMINATION)
+            {
+                sym++;
+            }
+            if (pr_burst_n++)
+            {
+                pr_burst_bytes += 4 * Len(d);
+                pr_burst_sym   += sym;
+            }
+            else
+            {
+                pr_burst_first = Now();
+            }
+            pr_burst_last = Now();
+            pr_burst_gen  = GetLinkSpeed(chk_node);
+        }
     }
     // Timed from its last transmission; a replay of a TLP Acked meanwhile
     // (a repeated Nak) needs no Ack
@@ -2029,6 +2076,18 @@ int ChkReport(void)
     probe("replay timer, no Nak, Gen1", pr_timer[0], t1);
     probe("replay timer, no Nak, Gen2", pr_timer[1], t2);
     probe("UpdateFC period", pr_fc, "at most 45000 ns: 30 us +50% (2.6.1.2)");
+    probe("read: MRd END to first CplD END", pr_rd_lat, "no limit; min is a single read, max with reads queued");
+
+    // The RC's posted burst: payload rate, against the link's, framing only
+    // (STP to END; no DLLPs or SKPs): what the endpoint's credits allowed
+    if (pr_burst_n > 1 && pr_burst_last > pr_burst_first)
+    {
+        double ns    = (double)(pr_burst_last - pr_burst_first);
+        double mbs   = pr_burst_bytes * 1000.0 / ns;
+        double limit = pr_burst_bytes * 1000.0 * chk_width * (pr_burst_gen == 2 ? 0.5 : 0.25) / pr_burst_sym;
+        VPrint("===> Probe: %-34s %6.1f MB/s, %4u writes; %.1f MB/s at Gen%d x%d, framing only (%.0f%%)\n",
+               "posted burst from the RC", mbs, pr_burst_n, limit, pr_burst_gen, chk_width, 100.0 * mbs / limit);
+    }
 
     if (ep_reqs)
     {
@@ -2143,6 +2202,11 @@ void ChkFault(const int fault)
 int ChkEpNextSeq(void)
 {
     return ep_next_seq;
+}
+
+void ChkBurst(const bool on)
+{
+    pr_burst_on = on;
 }
 
 void ChkEpDma(unsigned *reqs, unsigned *np_left)
