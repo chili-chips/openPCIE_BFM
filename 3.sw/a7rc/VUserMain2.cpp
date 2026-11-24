@@ -1002,17 +1002,32 @@ static void FaultMark(const char *what)
     VPrint("===> Fault at %.3f us: %s\n", GetLinkTimeNs(rc_node) / 1000.0, what);
 }
 
+// Waits on the tags, not a Completion count: a Completion may come in while
+// the next read is still being sent (the checker judges each: TL.CPL-MATCH)
 static void FaultReads(pcieModelClass *pcie, const int n, const char *what)
 {
-    int tags[4];
+    int      tags[4];
+    uint32_t want = 0;
+    cpl_tag_seen  = 0;
     for (int i = 0; i < n; i++)
     {
         tags[i] = tx_tag++ & 0x1f;
+        want   |= 1u << tags[i];
         pcie->memRead(bar_base[0] + 0x10, 4, tags[i], FW_REQUESTER_ID, SEND);
+    }
+    uint64_t sent_ns = GetLinkTimeNs(rc_node);
+    while ((cpl_tag_seen & want) != want && GetLinkTimeNs(rc_node) < sent_ns + FW_CPL_TIMEOUT_NS)
+    {
+        LinkIdle(1, rc_node);
+        gen1_seen |= (GetLinkSpeed(rc_node) == 1);
     }
     for (int i = 0; i < n; i++)
     {
-        WaitForCpl(tags[i], 4, what);
+        if (!(cpl_tag_seen & (1u << tags[i])))
+        {
+            VPrint("**** ERROR: RC model: no Completion for %s (tag %d)\n", what, tags[i]);
+            errors++;
+        }
     }
 }
 

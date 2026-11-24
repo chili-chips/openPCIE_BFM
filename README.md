@@ -194,7 +194,7 @@ An Endpoint other than ours tells the RC model what to expect with `-DA7RC_EP_EX
 
 Two licenses, side by side, per file (`REUSE.toml`, `LICENSES/`; `reuse lint` passes):
 
-- **GPL-3.0-or-later:** pcieVHost, VProc and mem_model (`1.upstream/vip/`), our changes to them (`1.upstream/patches/`, `3.sw/ltssm/`), `2.rtl/pcieVHostPipexN.sv`, `2.rtl/mem_model.sv`, `1.upstream/pcievhost-guide/`.
+- **GPL-3.0-or-later:** pcieVHost, VProc and mem_model (`1.upstream/vip/`), our changes to them (`1.upstream/patches/`, `3.sw/ltssm/`), `2.rtl/pcieVHostPipexN.sv`, `1.upstream/pcievhost-guide/`.
 - **BSD-3-Clause:** everything else: the wrappers and adapters in `2.rtl/`, the RC model (`3.sw/a7rc/`), tools, self-test.
 
 #### Credits and Acknowledgments
