@@ -34,17 +34,12 @@ declare -A CONFIGS=(          # name: make variables
 ORDER="default x1 x1-a7rc x4 phy x4-phy a7rc gen1"
 
 # sim:config: "issue|signature in the log (grep -E)"
-ICARUS_XN="iverilog#1789, automatic variable in PIPExN__pcieVHost.sv|PIPExN__pcieVHost.sv"
+ICARUS_X4="iverilog#521, loop index on the outer dimension of a packed array|pcieVHostPipexN.sv:135"
+ICARUS_SVA="iverilog#120, no SVA (assert property)|pipe_mac_adapter.sv:193"
 declare -A KNOWN=(
-    [icarus:default]=$ICARUS_XN
-    [icarus:x4]=$ICARUS_XN
-    [icarus:phy]=$ICARUS_XN
-    [icarus:x4-phy]=$ICARUS_XN
-    [icarus:a7rc]=$ICARUS_XN
-    [icarus:gen1]=$ICARUS_XN
-    [janushdl:x4]="openPCIE_BFM#1, JanusHDL size cast in pcieVHostPipexN.sv|pcieVHostPipexN.sv"
-    [janushdl:phy]="openCologne-PCIE#1, JanusHDL assertions in pipe_mac_adapter.sv|pipe_mac_adapter.sv"
-    [janushdl:x4-phy]="openCologne-PCIE#1, JanusHDL assertions in pipe_mac_adapter.sv|pipe_mac_adapter.sv"
+    [icarus:x4]=$ICARUS_X4
+    [icarus:phy]=$ICARUS_SVA
+    [icarus:x4-phy]="iverilog#521 and #120|pcieVHostPipexN.sv:135|pipe_mac_adapter.sv:193"
 )
 
 report() {  # name, seconds, pass (0/1), what, result, [known: "issue|signature"]
@@ -81,6 +76,18 @@ make --no-print-directory regress SIM=verilator SEEDS=10 REGRESS_JOBS=4 "$@" > $
 r=$(grep -a 'seeds failed$' $LOG/regress.log)
 case "$r" in "0 of "*) ok=1;; *) ok=0;; esac
 report regress $((SECONDS - t0)) $ok "regress SIM=verilator SEEDS=10" "$r; $(grep -a 'checked in no seed' $LOG/regress.log)"
+
+# Sustained load (make MIX=N): 1000 mix requests on the serial line at +300 ppm
+t0=$SECONDS
+make --no-print-directory run SIM=verilator IFACE=serial PPM=300 MIX=1000 "$@" > $LOG/load.log 2>&1
+r=$(grep -a -m1 'RC MODEL RESULT\|time limit' $LOG/load.log)
+case "$r" in *"RESULT: PASS"*) ok=1;; *) ok=0;; esac
+report load $((SECONDS - t0)) $ok "IFACE=serial PPM=300 MIX=1000" "${r:-no result}"
+
+# The checker against broken endpoints (../4.build/mutants.py)
+t0=$SECONDS
+make --no-print-directory mutants SIM=verilator MUTANT_JOBS=6 > $LOG/mutants.log 2>&1 && ok=1 || ok=0
+report mutants $((SECONDS - t0)) $ok "mutants" "$(grep -a 'mutants missed' $LOG/mutants.log)"
 
 echo "regression: $fails failed"
 [ $fails = 0 ]

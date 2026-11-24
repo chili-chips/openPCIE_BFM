@@ -26,9 +26,8 @@
 //                 |      PIPE, with its handshakes
 //                 u_phy  pipe_phy_core    (the PHY side) -> u_ep
 //
-//   The module is called tb: the pcieVHost headers call tb.Fatal. The run
-//   ends when the RC model has checked the endpoint (RC MODEL RESULT), or at
-//   the time limit `RUN_US.
+//   The run ends when the RC model has checked the endpoint (RC MODEL
+//   RESULT), or at the time limit `RUN_US.
 //==========================================================================
 
 `ifndef SIM_LANES
@@ -40,7 +39,7 @@
 
 module tb;
 
-  import pipe_sym_pkg::*;
+  import openPCIE_BFM_pkg::*;
 
   // PCLK at 16 bits per lane: 125 MHz at Gen1, 250 MHz at Gen2. The RC model
   // sets the rate (Gen2ClkSel); both models make their symbol clock from PCLK
@@ -329,12 +328,6 @@ module tb;
   end
 `endif
 
-  // Called by the pcieVHost `fatal macro (test_defs.svh): the RC model's FAIL
-  task Fatal;
-    begin
-      $fatal(1, "pcieVHost fatal: the RC model's FAIL, or a bad VProc access");
-    end
-  endtask
 
 endmodule : tb
 

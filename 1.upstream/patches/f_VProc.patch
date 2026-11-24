@@ -1,0 +1,214 @@
+openPCIE_BFM: VProc f_VProc.sv. No include, macro or timescale (openPCIE_BFM_pkg); byte enables on,
+no burst interface; VInit on an edge, Update a plain non-blocking assignment (no #0). Applied by build-vip.sh.
+
+--- a/f_VProc.sv
++++ b/f_VProc.sv
+@@ -22,11 +22,11 @@
+ //
+ // ====================================================================
+ 
+-`include "vprocdefs.vh"
+-
+-`ifdef VPROC_SV
+-`include "vprocdpi.vh"
+-`endif
++// openPCIE: no `include, no `timescale (the simulator's command line gives
++// it): the access word layout and the C calls (DPI-C, or VPI on Icarus) come
++// from openPCIE_BFM_pkg. The byte enables are always on, the burst
++// interface off: upstream's VPROC_BYTE_ENABLE and VPROC_BURST_IF, as every
++// openPCIE build set them
+ 
+ // ============================================================
+ // VProc module
+@@ -45,9 +45,7 @@
+     // Bus interface
+     output reg [31:0]      Addr,
+     
+-`ifdef VPROC_BYTE_ENABLE
+     output reg  [3:0]      BE,
+-`endif
+     output reg             WE,
+     output reg             RD,
+     output reg [31:0]      DataOut,
+@@ -62,17 +60,12 @@
+     output reg             Update,
+     input                  UpdateResponse,
+ 
+-`ifdef VPROC_BURST_IF
+-    // Burst count
+-    output reg [11:0]      Burst,
+-    output reg             BurstFirst,
+-    output reg             BurstLast,
+-`endif
+-
+     // Node number
+     input [NODE_WIDTH-1:0] Node
+ );
+ 
++import openPCIE_BFM_pkg::*;
++
+ // ------------------------------------------------------------
+ // Register definitions
+ // ------------------------------------------------------------
+@@ -93,20 +86,13 @@
+ 
+ // Internal initialised flag (set after VInit called)
+ reg                   Initialised;
++reg                   InitReq;        // its rising edge calls VInit
+ 
+ // Internal state
+ integer               TickCount;
+ integer               BlkCount;
+ integer               AccIdx;
+-integer               LBE;
+-
+-`ifndef VPROC_BYTE_ENABLE
+-// When no byte enable define a local dummy register to
+-// replace the missing port
+-reg [3:0]             BE;
+-`endif
+-
+-`ifndef VPROC_BURST_IF
++reg [3:0]             LBE;            // openPCIE: the 4 bits of BE (was integer)
+ 
+ // When no burst interface define some local dummy registers to
+ // replace the missing ports
+@@ -119,16 +105,6 @@
+ end
+ endtask
+ 
+-// vaccess is not defined when no burst interface
+-`define vaccess vdummy
+-
+-`else
+-
+-// When a burst interface defined, use $vaccess/VAccess (for VPI or DPI-C)
+-`define vaccess `VAccess
+-
+-`endif
+-
+ // ------------------------------------------------------------
+ // Initial process
+ // ------------------------------------------------------------
+@@ -143,10 +119,17 @@
+     BlkCount                            = 0;
+     IntSampLast                         = 0;
+ 
+-    // Don't remove delay! Needed to allow Node to be assigned
+-    // before the call to VInit
+-    `MINDELAY
+-    `VInit(Node);
++    // Node must be assigned before the call to VInit (upstream: a #0 here,
++    // its MINDELAY): a non-blocking assignment, whose update comes after every
++    // time-0 assignment, makes the edge that starts it. InitReq is set to 0
++    // first, so that a random initial value cannot hide that edge
++    InitReq                             = 1'b0;
++    InitReq                            <= 1'b1;
++end
++
++always @(posedge InitReq)
++begin
++    vp_init(Node);
+     Initialised                         = 1;
+ end
+ 
+@@ -162,7 +145,7 @@
+     WRAckSamp                           = WRAck;
+     IntSamp                             = {1'b0, Interrupt};
+     NodeI                               = Node;
+-    VPTicks                             = `DELTACYCLE;
++    VPTicks                             = VP_DELTA;
+ 
+     // Wait until the VProc software is initialised for this node (VInit called)
+     // before starting accesses
+@@ -173,7 +156,7 @@
+         // new value
+         if (IntSamp != IntSampLast)
+         begin
+-          `VIrq(NodeI, IntSamp);
++          vp_irq(NodeI, IntSamp);
+           IntSampLast                   <= IntSamp;
+         end
+ 
+@@ -205,29 +188,29 @@
+                         if (RD)
+                         begin
+                             AccIdx          = AccIdx + 1;
+-                            `vaccess(NodeI, AccIdx, DataInSamp, VPDataOut);
++                            vdummy(NodeI, AccIdx, DataInSamp, VPDataOut);
+                         end
+                     end
+ 
+                     // Get new access command
+-                    `VSched(NodeI, DataInSamp, VPDataOut, VPAddr, VPRW, VPTicks);
++                    vp_sched(NodeI, DataInSamp, VPDataOut, VPAddr, VPRW, VPTicks);
+ 
+                     // Update the outputs
+-                    Burst               <= VPRW[`BLKBITS];
+-                    WE                  <= VPRW[`WEBIT];
+-                    RD                  <= VPRW[`RDBIT];
+-                    BE                  <= VPRW[`BEBITS];
+-                    LBE                 <= VPRW[`LBEBITS];
++                    Burst               <= VPRW[VP_BLK_MSB:VP_BLK_LSB];
++                    WE                  <= VPRW[VP_WE_BIT];
++                    RD                  <= VPRW[VP_RD_BIT];
++                    BE                  <= VPRW[VP_BE_MSB:VP_BE_LSB];
++                    LBE                 <= VPRW[VP_LBE_MSB:VP_LBE_LSB];
+                     Addr                <= VPAddr;
+ 
+                     // If new BlkCount is non-zero, setup burst transfer
+-                    if (VPRW[`BLKBITS] !== 0)
++                    if (VPRW[VP_BLK_MSB:VP_BLK_LSB] !== 0)
+                     begin
+                         // Flag burst as first in block
+                         BurstFirst      <= 1'b1;
+ 
+                         // Initialise the burst block counter with count bits
+-                        BlkCount        = VPRW[`BLKBITS];
++                        BlkCount        = VPRW[VP_BLK_MSB:VP_BLK_LSB];
+                         
+                         // If a single word transfer, set the last flag
+                         if (BlkCount == 1)
+@@ -236,10 +219,10 @@
+                         end
+ 
+                         // On writes, override VPDataOut to get from burst access task VAccess at index 0
+-                        if (VPRW[`WEBIT])
++                        if (VPRW[VP_WE_BIT])
+                         begin
+                             AccIdx      = 0;
+-                            `vaccess(NodeI, AccIdx, `DONTCARE, VPDataOut);
++                            vdummy(NodeI, AccIdx, VP_DONTCARE, VPDataOut);
+                         end
+                         else
+                         begin
+@@ -255,7 +238,7 @@
+                 else
+                 begin
+                     AccIdx              = AccIdx + 1;
+-                    `vaccess(NodeI, AccIdx, DataInSamp, VPDataOut);
++                    vdummy(NodeI, AccIdx, DataInSamp, VPDataOut);
+                     BlkCount            = BlkCount - 1;
+ 
+                     if (BlkCount == 1)
+@@ -265,7 +248,7 @@
+                     end
+                     else
+                     begin
+-                        BE              <= 4'hf;
++                        BE              <= '1;
+                     end
+ 
+                     // When bursting, reassert non-delta VPTicks value to break out of loop.
+@@ -283,9 +266,9 @@
+                 end
+ 
+                 // Flag to update externally and wait for response.
+-                // The `MINDELAY ensures it's not updated until other outputs
++                // Upstream's MINDELAY ensured it's not updated until other outputs
+                 // are updated.
+-                Update              <= `MINDELAY ~Update;
++                Update              <= ~Update;
+                 if (DISABLE_DELTA == 0)
+                 begin
+                     @(UpdateResponse);

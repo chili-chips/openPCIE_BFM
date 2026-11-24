@@ -236,6 +236,7 @@ static int      rc_last_seq   = 0xfff;
 static int      rc_acked      = 0xfff;
 static uint64_t rc_tx_ns[4096];
 static int      rc_tx_gen[4096];        // the speed it went out at
+static uint64_t rc_tx_wall[4096];       // ... and when, in link time (the probe: no Recovery since)
 static uint64_t ep_tx_ns[4096];         // endpoint TLPs: when each last went out
 static int      ep_acked      = 0xfff;  // ... the last the RC Acked, and when that advanced
 static uint64_t ep_ack_ns     = 0;
@@ -245,9 +246,32 @@ static uint64_t rc_nak_ns     = 0;      // ... when
 static int      ep_acked_prev = 0xfff;  // the RC's Acks: the one before the last advance
 static bool     rc_init2_sent = false;  // the RC sent InitFC2: the endpoint may leave FC_INIT2
 static bool     corr_since    = false;  // a Correctable error at the endpoint since Device Status was read
+static bool     fatal_since   = false;  // ... a Fatal one: a Data Link Protocol Error (an Ack for a TLP never sent)
+static unsigned rc_nullified  = 0;      // the RC's nullified TLPs (FAULT_TX_NULLIFY): on the wire, not sent
 static bool     poison_np     = false;  // a poisoned non-posted request: its UR, and maybe Non-Fatal too
 static unsigned rc_naks       = 0;      // for the report: the RC's Naks, the endpoint's replays
 static unsigned ep_rpl_runs   = 0, ep_rpl_tlps = 0;
+
+// The probe: the endpoint's Data Link timing, as the RC sees it (with the
+// link), printed at the end (ChkReport()), as openPCIE's HM_PROBE measures
+// the hard macro
+struct Probe
+{
+    uint64_t min = ~0ull, max = 0;
+    unsigned n   = 0;
+    void add(const uint64_t v)
+    {
+        min = (v < min) ? v : min;
+        max = (v > max) ? v : max;
+        n++;
+    }
+};
+static Probe    pr_ack[2];              // Ack latency for the RC's TLPs, Gen1 and Gen2
+static Probe    pr_bad_nak;             // a TLP with a bad LCRC: to its Nak
+static Probe    pr_dup_ack;             // a duplicate: to its Ack
+static Probe    pr_nak_rpl;             // the RC's Nak: to the replay
+static Probe    pr_timer[2];            // no Nak: the replay timer, from its start to the replay, Gen1 and Gen2
+static Probe    pr_fc;                  // UpdateFC period, finite types
 
 // The RC's injected faults (ChkFault()): armed, then the TLP they hit
 static int      rc_fault_arm  = 0;
@@ -462,8 +486,12 @@ static void RxAckNak(const bool nak, const int seq)
     // A bad TLP: Naked with the sequence number before it, not Acked
     if (rc_bad_seq >= 0 && (nak || NotBehind(seq, rc_bad_seq, 4096)))
     {
-        Check(R_BAD_TLP, nak && seq == ((rc_bad_seq - 1) & 0xfff), "TLP %d sent with a bad LCRC: the endpoint's %s %d",
+        Check(R_BAD_TLP, nak && seq == ((rc_bad_seq - 1) & 0xfff), "TLP %d sent with a bad LCRC or a skipped sequence number: the endpoint's %s %d",
               rc_bad_seq, nak ? "Nak" : "Ack", seq);
+        if (nak)
+        {
+            pr_bad_nak.add(L0Now() - rc_tx_ns[rc_bad_seq]);
+        }
         rc_bad_seq = -1;
     }
     // A duplicate: Acked (it names the last TLP received, at or past it)
@@ -472,6 +500,10 @@ static void RxAckNak(const bool nak, const int seq)
         uint64_t lat = L0Now() - rc_dup_ns, lim = CHK_ACK_LIMIT_NS(rc_dup_gen, (int)GetLinkSpeed(chk_node));
         Check(R_DUPLICATE, !nak && lat <= lim, "TLP %d sent again after its Ack: the endpoint's %s %d after %llu ns, limit %llu ns",
               rc_dup_seq, nak ? "Nak" : "Ack", seq, (unsigned long long)lat, (unsigned long long)lim);
+        if (!nak)
+        {
+            pr_dup_ack.add(lat);
+        }
         rc_dup_seq = -1;
     }
 
@@ -484,6 +516,7 @@ static void RxAckNak(const bool nak, const int seq)
         return;
     }
     uint32_t gen   = GetLinkSpeed(chk_node);
+    bool     first = true;
     for (int s = (rc_acked + 1) & 0xfff; ; s = (s + 1) & 0xfff)
     {
         if (rc_pending[s])
@@ -492,6 +525,11 @@ static void RxAckNak(const bool nak, const int seq)
             uint64_t lat   = L0Now() - rc_tx_ns[s];
             Check(R_ACK_LAT, lat <= limit, "TLP %d Acked after %llu ns in L0, limit %llu ns at Gen%u",
                   s, (unsigned long long)lat, (unsigned long long)limit, gen);
+            if (first && GetLtssmState(chk_node) == CHK_LTSSM_L0 && GetLtssmL0Ns(chk_node) <= rc_tx_wall[s])
+            {
+                pr_ack[gen == 2].add(lat);          // the oldest TLP the Ack covers, in L0 all along
+            }
+            first = false;
             rc_pending[s] = false;
         }
         if (s == seq)
@@ -578,6 +616,7 @@ static void RxFc(const int type, const PktData_t *d)
     {
         uint64_t gap = L0Now() - ep_fc_last_ns[t];
         Check(R_FC_PERIOD, gap <= CHK_UPDATEFC_NS, "UpdateFC type %d %llu ns after the last", t, (unsigned long long)gap);
+        pr_fc.add(gap);
     }
     ep_fc_last_ns[t] = L0Now();
 }
@@ -1006,15 +1045,17 @@ static void CfgRead(const int k, const uint32_t v)
         bool     nf_req = (ur_since & UR_P) || (ur_since && !rber) || (poison_dev && !rber);
         bool     nf_may = nf_req || poison_dev || poison_np;   // one report per TLP only recommended (6.2.3.2.3)
         uint32_t bits   = ((ur_since & UR_P) || (ur_since && !rber) ? 0x00080000 : 0) | (nf_req ? 0x00020000 : 0) |
-                          (corr_since ? 0x00010000 : 0);
-        uint32_t clr    = 0x00040000 | (nf_may ? 0 : 0x00020000);   // Correctable may have causes the RC cannot see
-        if (known && (ur_since || poison_dev || corr_since))
+                          (corr_since ? 0x00010000 : 0) | (fatal_since ? 0x00040000 : 0);
+        uint32_t clr    = (fatal_since ? 0 : 0x00040000) | (nf_may ? 0 : 0x00020000);   // Correctable may have causes the RC cannot see
+        if (known && (ur_since || poison_dev || corr_since || fatal_since))
         {
             Check(R_ERR_STATUS, (v & bits) == bits && !(v & clr),
                   "Device Status 0x%04x after %s: 0x%04x expected set, 0x%04x clear", v >> 16,
-                  ur_since ? "an Unsupported Request" : poison_dev ? "a poisoned request" : "a Correctable error",
+                  ur_since ? "an Unsupported Request" : poison_dev ? "a poisoned request" :
+                  fatal_since ? "a Data Link Protocol Error" : "a Correctable error",
                   bits >> 16, clr >> 16);
-            corr_since = false;
+            corr_since  = false;
+            fatal_since = false;
             poison_np  = false;
         }
         if (!ur_since && ur_clear)
@@ -1503,6 +1544,14 @@ static void RxTlp(const pPkt_t pkt, const int edb)
             Check(R_REPLAY, rc_nak_since || (since >= timer && since <= 2 * timer + CHK_REPLAY_SLACK_NS),
                   "TLP %d sent again %llu ns after the replay timer started, no Nak from the RC, replay timer %llu ns",
                   seq, (unsigned long long)since, (unsigned long long)timer);
+            if (rc_nak_since)
+            {
+                pr_nak_rpl.add(L0Now() - rc_nak_ns);
+            }
+            else
+            {
+                pr_timer[GetLinkSpeed(chk_node) == 2].add(since);
+            }
             corr_since  |= !rc_nak_since;        // the endpoint's Replay Timer Timeout: Correctable
             rc_nak_since = false;               // a Nak excuses one replay
         }
@@ -1556,6 +1605,16 @@ static void TxPkt(const pPkt_t pkt)
             // The replay timer's late bound: an unAcked TLP waits at most
             // twice the timer for its replay (3.5.2.1, +100%)
             int      a     = ((d[3] & 0xf) << 8) | (d[4] & 0xff);
+
+            // The RC's Ack for a TLP the endpoint never sent (ChkFault()): a
+            // Data Link Protocol Error, discarded, logged Fatal (3.5.2.1)
+            if ((rc_fault_arm & CHK_FAULT_ACK_UNSENT) && a != ((ep_next_seq - 1) & 0xfff) &&
+                NotBehind(a, (ep_next_seq - 1) & 0xfff, 4096))
+            {
+                rc_fault_arm &= ~CHK_FAULT_ACK_UNSENT;
+                fatal_since   = true;
+                return;
+            }
             int      old   = (ep_acked + 1) & 0xfff;
             uint64_t timer = (GetLinkSpeed(chk_node) == 2) ? CHK_REPLAY_GEN2_SYM * 2 : CHK_REPLAY_GEN1_SYM * 4;
             if (old != ep_next_seq && NotBehind((ep_next_seq - 1) & 0xfff, old, 4096))
@@ -1610,10 +1669,12 @@ static void TxPkt(const pPkt_t pkt)
         uint32_t bc = ((H(d, 6) & 0xf) << 8) | H(d, 7);
         ep_np_done += !(H(d, 0) & TL_TYPE_WRITE) || (bc ? bc : 4096) <= Len(d) * 4;
     }
-    if (seq == ((rc_last_seq + 1) & 0xfff) && (rc_fault_arm & FAULT_TX_BAD_LCRC))
+    // A bad LCRC, or a sequence number one ahead on the wire: the endpoint
+    // Naks, with the last good one (3.5.3.1)
+    if (seq == ((rc_last_seq + 1) & 0xfff) && (rc_fault_arm & (FAULT_TX_BAD_LCRC | FAULT_TX_SEQ_SKIP)))
     {
         rc_bad_seq    = seq;
-        rc_fault_arm &= ~FAULT_TX_BAD_LCRC;
+        rc_fault_arm &= (rc_fault_arm & FAULT_TX_BAD_LCRC) ? ~FAULT_TX_BAD_LCRC : ~FAULT_TX_SEQ_SKIP;
         corr_since    = true;                   // the endpoint's Bad TLP
     }
     else if (seq == rc_last_seq && (rc_fault_arm & FAULT_TX_DUP))
@@ -1636,6 +1697,7 @@ static void TxPkt(const pPkt_t pkt)
     if (seq != rc_acked && NotBehind(seq, rc_acked, 4096))
     {
         rc_tx_ns[seq]   = L0Now();
+        rc_tx_wall[seq] = Now();
         rc_tx_gen[seq]  = GetLinkSpeed(chk_node);
         rc_pending[seq] = true;
     }
@@ -1882,7 +1944,11 @@ static void Monitor(const pPkt_t pkt, const int rx, const int edb, void *usrptr)
         Check(R_PL_L0_ONLY, !pl_ep_training || ep_l0, "%s from the endpoint after its TS1/TS2, before L0 (LTSSM state %d)",
               pkt->seq == DLLP_SEQ_ID ? "DLLP" : "TLP", GetLtssmState(chk_node));
     }
-    if (!rx)
+    if (!rx && edb)
+    {
+        rc_nullified++;                         // nullified (FAULT_TX_NULLIFY): the endpoint drops it, no Nak
+    }
+    else if (!rx)
     {
         TxPkt(pkt);
     }
@@ -1934,12 +2000,36 @@ int ChkReport(void)
     // The RC's faults: each hit a TLP and was answered
     if (rc_fault_arm || rc_bad_seq >= 0 || rc_dup_seq >= 0 || rc_nak_owed)
     {
-        Check(R_BAD_TLP, rc_bad_seq < 0 && !(rc_fault_arm & FAULT_TX_BAD_LCRC), "a TLP sent with a bad LCRC never Naked");
+        Check(R_BAD_TLP, rc_bad_seq < 0 && !(rc_fault_arm & (FAULT_TX_BAD_LCRC | FAULT_TX_SEQ_SKIP)),
+              "a TLP sent with a bad LCRC or a skipped sequence number never Naked");
         Check(R_DUPLICATE, rc_dup_seq < 0 && !(rc_fault_arm & FAULT_TX_DUP), "a TLP sent twice never Acked");
         Check(R_REPLAY_ORDER, !rc_nak_owed, "the replay after the RC's Nak never came");
     }
     VPrint("===> Checker: the RC sent %u Nak(s); the endpoint sent %u TLP(s) again, in %u replay(s)\n", rc_naks,
            ep_rpl_tlps, ep_rpl_runs);
+
+    // The probe: min to max ns, how many, and the limit
+    auto probe = [](const char *what, const Probe &p, const char *limit) {
+        if (p.n)
+        {
+            VPrint("===> Probe: %-34s %6llu to %6llu ns, %4u measured; %s\n", what, (unsigned long long)p.min,
+                   (unsigned long long)p.max, p.n, limit);
+        }
+    };
+    char a1[80], a2[80], t1[80], t2[80];
+    snprintf(a1, sizeof a1, "limit %d ns with the link (3.5.3.1)", CHK_ACK_LIMIT_NS(1, 1));
+    snprintf(a2, sizeof a2, "limit %d ns with the link (3.5.3.1)", CHK_ACK_LIMIT_NS(2, 2));
+    snprintf(t1, sizeof t1, "timer %d ns, -0%%/+100%% (3.5.2.1)", CHK_REPLAY_GEN1_SYM * 4);
+    snprintf(t2, sizeof t2, "timer %d ns, -0%%/+100%% (3.5.2.1)", CHK_REPLAY_GEN2_SYM * 2);
+    probe("the endpoint's Ack latency, Gen1", pr_ack[0], a1);
+    probe("the endpoint's Ack latency, Gen2", pr_ack[1], a2);
+    probe("bad LCRC to the endpoint's Nak", pr_bad_nak, "the Ack latency limit (3.5.3.1)");
+    probe("duplicate to the endpoint's Ack", pr_dup_ack, "the Ack latency limit (3.5.3.1)");
+    probe("the RC's Nak to the replay", pr_nak_rpl, "no limit; the link's round trip and a TLP (3.5.2.1)");
+    probe("replay timer, no Nak, Gen1", pr_timer[0], t1);
+    probe("replay timer, no Nak, Gen2", pr_timer[1], t2);
+    probe("UpdateFC period", pr_fc, "at most 45000 ns: 30 us +50% (2.6.1.2)");
+
     if (ep_reqs)
     {
         VPrint("===> Checker: the endpoint sent %u request(s); it had %u posted header credit(s) left at least\n", ep_reqs,
@@ -2048,6 +2138,11 @@ void ChkUrPosted(void)
 void ChkFault(const int fault)
 {
     rc_fault_arm |= fault;
+}
+
+int ChkEpNextSeq(void)
+{
+    return ep_next_seq;
 }
 
 void ChkEpDma(unsigned *reqs, unsigned *np_left)

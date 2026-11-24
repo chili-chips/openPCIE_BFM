@@ -17,11 +17,10 @@ SPDX-FileCopyrightText = "2026 CHILI.CHIPS.LLC"
 SPDX-License-Identifier = "BSD-3-Clause"
 
 # wyvernSemi co-simulation VIP by Simon Southwell (VProc, pcieVHost,
-# mem_model), our changes to it (patches, the LTSSM helper, the mem_model
-# lint wrapper 2.rtl/mem_model.sv), and the
+# mem_model), our changes to it (patches, the LTSSM helper), and the
 # pcieVHost manual's summary with its pictures.
 [[annotations]]
-path = ["1.upstream/vip/**", "1.upstream/patches/**", "3.sw/ltssm/**", "1.upstream/pcievhost-guide/**", "2.rtl/mem_model.sv"]
+path = ["1.upstream/vip/**", "1.upstream/patches/**", "3.sw/ltssm/**", "1.upstream/pcievhost-guide/**"]
 precedence = "closest"
 SPDX-FileCopyrightText = "2004-2025 Simon Southwell"
 SPDX-License-Identifier = "GPL-3.0-or-later"

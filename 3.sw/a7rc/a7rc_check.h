@@ -53,7 +53,9 @@ unsigned ChkTagGen(const int tag);   // non-posted requests sent with 'tag' so f
 // was sent (the endpoint must still set UR Detected, CFG.ERR-STATUS)
 void ChkExpectUr(const int tag);
 void ChkUrPosted(void);
-void ChkFault(const int fault);                     // the RC injects FAULT_TX_BAD_LCRC or FAULT_TX_DUP (pcie.h) next
+void ChkFault(const int fault);                     // the RC injects FAULT_TX_BAD_LCRC, _DUP, _SEQ_SKIP (pcie.h) or CHK_FAULT_ACK_UNSENT next
+int  ChkEpNextSeq(void);                            // the endpoint's next new sequence number, as the RC saw it
+#define CHK_FAULT_ACK_UNSENT 0x10000                // the RC Acks a TLP the endpoint never sent (no pcie.h bit)
 void ChkEpDma(unsigned *reqs, unsigned *np_left);   // the endpoint's requests seen, and those not yet completed
 int  ChkOutstanding(void);                          // requests still waiting for a Completion
 unsigned ChkFails(const char *id);   // a rule's violations so far, by its ID

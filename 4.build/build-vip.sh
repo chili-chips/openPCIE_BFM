@@ -14,10 +14,14 @@
 #   $VIP_DIR/lib        libcosimlnx.a (VProc), libpcielnx.a (pcieVHost)
 #   $VIP_DIR/include    their C/C++ headers, ltssm.h
 #   $VIP_DIR/hdl        f_VProc.sv, f_mem_model.sv, pcieVHost*.sv, clkmux.sv,
-#                       Serialiser.sv; headers/ (.svh) for the include path
+#                       Serialiser.sv: no include files, no macros, no
+#                       `timescale; they import 2.rtl/openPCIE_BFM_pkg.sv,
+#                       compiled first
 #
-# Our changes to upstream are in 1.upstream/vip/ (4.build/vip-import.sh), but for
-# 1.upstream/patches/pcievhost-speed.patch and 1.upstream/patches/vproc-coroutine.patch: VIP_PATCH and VPROC_PATCH below.
+# Our changes to upstream are in 1.upstream/vip/ (4.build/vip-import.sh) and in
+# 1.upstream/patches/: pcievhost-speed.patch and vproc-coroutine.patch (VIP_PATCH
+# and VPROC_PATCH below), f_VProc.patch and f_mem_model.patch (always). Every
+# change is in a patch, none is made here.
 #
 # VIP_BUILD (default ~/.cache/openPCIE_BFM/vip) is the output, shared by all
 # checkouts; it is rebuilt when the content of 1.upstream/vip/, this script,
@@ -25,20 +29,21 @@
 # installed and its libraries are missing. Needs gcc, ar, and patch for VIP_PATCH.
 #
 # VIP_PATCH: a patch on the pcieVHost C sources, core, PIPE wrapper, serialiser
-# and headers (-p1, a/src/..., a/verilog/..., upstream's .v names: mapped to
-# our .sv and .svh), applied to a copy before the build: 1.upstream/patches/pcievhost-speed.patch for the Artix-7 RC
-# model (the make file passes it). ltssm.c is not in the libraries:
-# the make file compiles 3.sw/ltssm/ltssm.c with the user code.
+# and clock mux (-p1, a/src/..., a/verilog/...), applied to a copy before the
+# build: 1.upstream/patches/pcievhost-speed.patch for the Artix-7 RC model (the
+# make file passes it). ltssm.c is not in the libraries: the make file compiles
+# 3.sw/ltssm/ltssm.c with the user code.
 set -euo pipefail
 HERE=$(cd "$(dirname "$0")" && pwd)
 SRC=$(cd "$HERE/../1.upstream/vip" && pwd)
 OUT=${VIP_BUILD:-$HOME/.cache/openPCIE_BFM/vip}
-VIP_PATCH=${VIP_PATCH:-}
+VIP_PATCH=${VIP_PATCH:-$HERE/../1.upstream/patches/pcievhost-speed.patch}   # the HDL needs it: openPCIE_BFM_pkg
 VPROC_PATCH=${VPROC_PATCH:-}
-# always applied: VInit started by a non-blocking assignment, not `MINDELAY (#0)
-VINIT_PATCH=$HERE/../1.upstream/patches/f_VProc-vinit.patch
+# always applied: VProc's and mem_model's HDL without includes, macros or delays
+VPROC_HDL_PATCH=$HERE/../1.upstream/patches/f_VProc.patch
+MEM_HDL_PATCH=$HERE/../1.upstream/patches/f_mem_model.patch
 STAMP=$({ [ -n "$VIP_PATCH" ] && cat "$VIP_PATCH"; [ -n "$VPROC_PATCH" ] && cat "$VPROC_PATCH"
-           cat "$0" "$VINIT_PATCH"
+           cat "$0" "$VPROC_HDL_PATCH" "$MEM_HDL_PATCH"
            (cd "$SRC" && find . -type f -print0 | LC_ALL=C sort -z | xargs -0 sha256sum); } | sha256sum)
 ICA_INC=$(dirname "$(command -v iverilog 2>/dev/null || echo /usr/bin/iverilog)")/../include/iverilog
 M64=; [ "$(uname -m)" = x86_64 ] && M64=-m64
@@ -52,24 +57,21 @@ fi
 V=$SRC/vproc
 P=$SRC/pcievhost
 rm -rf "$OUT"
-mkdir -p "$OUT"/{lib,include,hdl/headers,obj}
+mkdir -p "$OUT"/{lib,include,hdl,obj}
 lf() { cat "$1"; }  # the copies are LF already
 
 # PS: the pcieVHost C sources, patched with VIP_PATCH when given
 PS=$P/src
 PL=$P/verilog/lib
 PV=$P/verilog/pcieVHost
-PH=$P/verilog/headers
 if [ -n "$VIP_PATCH" ]; then
     mkdir -p "$OUT/pcievhost/verilog"
     cp -r "$P/src" "$OUT/pcievhost/"
-    cp -r "$P/verilog/lib" "$P/verilog/pcieVHost" "$P/verilog/headers" "$OUT/pcievhost/verilog/"
-    sed -E '/^(---|\+\+\+) /{s#(/(headers|test)/\w+)\.v(\s|$)#\1.svh\3#;s#\.v(\s|$)#.sv\1#}' "$VIP_PATCH" |
-        patch -s -p1 -d "$OUT/pcievhost" >&2
+    cp -r "$P/verilog/lib" "$P/verilog/pcieVHost" "$OUT/pcievhost/verilog/"
+    patch -s -p1 -d "$OUT/pcievhost" < "$VIP_PATCH" >&2
     PS=$OUT/pcievhost/src
     PL=$OUT/pcievhost/verilog/lib
     PV=$OUT/pcievhost/verilog/pcieVHost
-    PH=$OUT/pcievhost/verilog/headers
 fi
 # VC: the VProc C sources, patched with VPROC_PATCH when given (the user code
 # as a coroutine on the simulator's thread)
@@ -88,22 +90,16 @@ ar cr "$OUT/lib/libcosimlnx.a" "$OUT"/obj/VSched.o "$OUT"/obj/VUser.o
 for f in VProc.h VProcClass.h VProcIrqClass.h VSched_pli.h VUser.h; do
     lf "$VC/$f" > "$OUT/include/$f"
 done
-for f in f_VProc.sv extradefs.svh vprocdefs.vh vprocdpi.vh; do lf "$V/$f" > "$OUT/hdl/$f"; done
-
-# No `timescale in the HDL: the simulator command line gives it. Upstream's
-# timescale macros become empty (below, for pcieVHost too).
-sed -i -E 's/^( *`define VProcTimeScale +)`timescale.*/\1/' "$OUT/hdl/extradefs.svh"
-# VProc's Update flag: a plain non-blocking assignment (upstream: <= `MINDELAY,
-# #0 on all simulators but Verilator)
-sed -i -E 's/<= *`MINDELAY +/<= /' "$OUT/hdl/f_VProc.sv"
-# and its #0 before VInit (so that Node holds its value): a non-blocking
-# assignment whose edge calls VInit (1.upstream/patches/f_VProc-vinit.patch)
-patch -s --no-backup-if-mismatch -p1 -d "$OUT/hdl" < "$VINIT_PATCH" >&2
-if grep -n '^ *`MINDELAY' "$OUT/hdl/f_VProc.sv" >&2; then exit 1; fi
+# f_VProc.sv with 1.upstream/patches/f_VProc.patch: openPCIE_BFM_pkg, no
+# include, macro, `timescale or #0 (VInit on an edge, Update a plain
+# non-blocking assignment)
+lf "$V/f_VProc.sv" > "$OUT/hdl/f_VProc.sv"
+patch -s --no-backup-if-mismatch -p1 -d "$OUT/hdl" < "$VPROC_HDL_PATCH" >&2
 
 # ---- mem_model: HDL only (its C model is part of pcieVHost) ------------------
-sed '/^`timescale/d' "$SRC/mem_model/f_mem_model.sv" > "$OUT/hdl/f_mem_model.sv"
-lf "$SRC/mem_model/mem_model_dpi.vh" > "$OUT/hdl/mem_model_dpi.vh"
+# f_mem_model.sv with 1.upstream/patches/f_mem_model.patch: openPCIE_BFM_pkg
+lf "$SRC/mem_model/f_mem_model.sv" > "$OUT/hdl/f_mem_model.sv"
+patch -s --no-backup-if-mismatch -p1 -d "$OUT/hdl" < "$MEM_HDL_PATCH" >&2
 
 # ---- pcieVHost: libpcielnx.a, headers, HDL, LTSSM helper ----------------------
 for f in codec mem pcie pcie_utils pcicrc32 displink; do
@@ -114,28 +110,15 @@ for f in codec.h mem.h pci_express.h pcie.h pcieModelClass.h pcie_utils.h pcie_v
     lf "$PS/$f" > "$OUT/include/$f"
 done
 
-H=$OUT/hdl/headers
-for f in allheaders.svh pciedispheader.svh pciexpress_header.svh timescale.svh; do
-    lf "$PH/$f" > "$H/$f"
-done
-sed -i -E 's/^`define WsTimeScale .*/`define WsTimeScale/' "$H/timescale.svh"
-lf "$PH/pcie_vhost_map.svh" > "$H/pcie_vhost_map.svh"
-lf "$P/verilog/test/test_defs.svh" > "$H/test_defs.svh"
-
+# the HDL as VIP_PATCH leaves it: openPCIE_BFM_pkg, no include, macro or
+# `timescale, no delay on registers (upstream's `RegDel) or inputs
+# (`PcieVHostSampleDel), no clkmux self-test
 for f in pcieVHost.sv pcieVHostPipex1.sv; do lf "$PV/$f" > "$OUT/hdl/$f"; done
 for f in clkmux.sv Serialiser.sv; do lf "$PL/$f" > "$OUT/hdl/$f"; done
-# clkmux.sv's own self-test (`ifdef TEST, compiled by nobody) has unitless delays: drop it
-sed -i '/^`ifdef TEST$/,/^`endif/d' "$OUT/hdl/clkmux.sv"
-grep -q '^ *endmodule' "$OUT/hdl/clkmux.sv" || { echo "clkmux.sv: TEST block removal cut too far" >&2; exit 1; }
-# Plain non-blocking assignments and inputs: upstream's `RegDel on its
-# registers and `PcieVHostSampleDel on its inputs go, so no delay hides a
-# race at a clock edge
-sed -i -E -e 's/<= *#`RegDel +/<= /' -e 's/assign +#`PcieVHostSampleDel +/assign /' "$OUT"/hdl/*.sv
-if grep -n '#`\(RegDel\|PcieVHostSampleDel\)' "$OUT"/hdl/*.sv >&2; then exit 1; fi
 
 # ---- Icarus: the same C models, over VPI instead of DPI-C ------------------------
 #   libcosimica.a  VProc, its VPI table supplied by pcieVHost's veriuser.c
-#   libpcieica.a   pcieVHost with veriuser.c and mem_model.c
+#   libpcieica.a   pcieVHost with veriuser.c and mem_model.c ($memread, $memwrite)
 if [ -f "$ICA_INC/vpi_user.h" ]; then
     ICA="-DICARUS -DVPROC_PLI_VPI -DEXTERN_VPI_TABLE -D_REENTRANT -I$ICA_INC"
     for f in VSched VUser; do
@@ -144,7 +127,7 @@ if [ -f "$ICA_INC/vpi_user.h" ]; then
     ar cr "$OUT/lib/libcosimica.a" "$OUT"/obj/ica_VSched.o "$OUT"/obj/ica_VUser.o
     for f in codec mem mem_model pcie pcie_utils pcicrc32 displink veriuser; do
         gcc -c -O2 -g -fPIC $M64 -Wno-incompatible-pointer-types -Wno-format -I"$VC" -I"$ICA_INC" \
-            -DICARUS "$PS/$f.c" -o "$OUT/obj/ica_$f.o"
+            -DICARUS -DENABLE_MEM_PLI "$PS/$f.c" -o "$OUT/obj/ica_$f.o"   # ENABLE_MEM_PLI: $memread, $memwrite
     done
     ar cr "$OUT/lib/libpcieica.a" "$OUT"/obj/ica_{codec,mem,mem_model,pcie,pcie_utils,pcicrc32,displink,veriuser}.o
 else

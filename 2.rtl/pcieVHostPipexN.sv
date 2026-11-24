@@ -19,10 +19,8 @@
 //   the core on its ElecIdleIn, one bit per lane.
 //==========================================================================
 
-`include "pciexpress_header.svh"
-
 module pcieVHostPipexN
-  import pipe_sym_pkg::*;
+  import openPCIE_BFM_pkg::*;
 #(
     parameter int NodeNum   = 8,
     parameter bit EndPoint  = 1,
@@ -67,14 +65,6 @@ module pcieVHostPipexN
   bit   [15:0]      link_outk_q;
   logic [15:0]      link_in_idle;
   logic [Lanes-1:0] rx_idle;
-
-  // pipe_sym_pkg's NOSIG_SYM is the patch's `NOSIG (the header is included
-  // for this check only)
-  initial begin
-    if (NOSIG_SYM != {1'b1, `NOSIG}) begin
-      $fatal(1, "pipe_sym_pkg::NOSIG_SYM differs from NOSIG in pciexpress_header.svh");
-    end
-  end
 
   for (genvar l = 0; l < 16; l++) begin : g_link_in
     if (l < Lanes) begin : g_used

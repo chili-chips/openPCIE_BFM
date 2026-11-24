@@ -230,7 +230,8 @@ static uint32_t Rand(const uint32_t n)
 enum
 {
     S_FW, S_CFG_RD, S_CFG_WR, S_B2B_WR, S_B2B_RD, S_FILL, S_MIX_WR, S_MIX_RD, S_MULTI_DW, S_PARTIAL_BE, S_AT_4KB,
-    S_GAP_NONE, S_GAP_RANDOM, S_BURST, S_OUT_MAX, S_UR_NP, S_UR_P, S_VDM1, S_ERR_CLR, S_ECRC, S_POISON, S_TC_ATTR, S_NAK, S_ACK_HOLD, S_BAD_LCRC, S_DUP, S_BAD_DLLP, S_EP_REQ, S_FC_HOLD,
+    S_GAP_NONE, S_GAP_RANDOM, S_BURST, S_OUT_MAX, S_UR_NP, S_UR_P, S_VDM1, S_ERR_CLR, S_ECRC, S_POISON, S_TC_ATTR, S_NAK, S_ACK_HOLD, S_BAD_LCRC, S_DUP, S_BAD_DLLP,
+    S_DROP, S_NULLIFY, S_SEQ_SKIP, S_BAD_ECRC, S_ACK_UNSENT, S_EP_REQ, S_FC_HOLD,
     S_SPEED, S_RETRAIN, S_RETRAIN_SPEED,
     S_NUM
 };
@@ -243,7 +244,8 @@ static const char *stim_name[S_NUM] =
     "mix: most requests outstanding", "unsupported: non-posted (UR)",
     "unsupported: posted (dropped)", "vendor message type 1 (dropped)", "error status cleared (RW1C)", "ECRC (TD 1) requests",
     "poisoned writes", "reads with TC 1-7, RO/NS", "Naks of good TLPs", "Acks held past the replay timer",
-    "TLPs with a bad LCRC", "duplicate TLPs", "DLLPs with a bad CRC", "the endpoint's requests (DMA)",
+    "TLPs with a bad LCRC", "duplicate TLPs", "DLLPs with a bad CRC", "the endpoint's TLPs lost",
+    "nullified TLPs", "sequence numbers skipped", "TLPs with a bad ECRC", "Acks for a TLP never sent", "the endpoint's requests (DMA)",
     "UpdateFCs held (credit starvation)", "speed changes, reads outstanding",
     "Recovery at a random point", "... with a speed change",
 };
@@ -1056,6 +1058,50 @@ static void Faults(pcieModelClass *pcie)
     LinkIdle(4 * REPLAY_TIMER_GEN2, rc_node);
     stim[S_BAD_DLLP]++;
 
+    // The endpoint's next TLP lost, as if its STP or END were hit: no Ack, no
+    // Nak; the endpoint replays on its timer
+    FaultMark("the RC drops the endpoint's next TLP");
+    InjectFault(FAULT_RX_DROP_NEXT, rc_node);
+    FaultReads(pcie, 1, "a read whose Completion is lost once");
+    stim[S_DROP]++;
+
+    // A nullified TLP (the LCRC inverted, EDB), then the TLP: the endpoint
+    // drops the first, with no Nak (3.5.2.1)
+    FaultMark("the RC sends a nullified TLP, then the TLP");
+    InjectFault(FAULT_TX_NULLIFY, rc_node);
+    FaultReads(pcie, 1, "a read sent nullified first");
+    stim[S_NULLIFY]++;
+
+    // A sequence number one ahead (the LCRC good): the endpoint Naks it with
+    // the last good one, the RC replays (3.5.3.1)
+    FaultMark("the RC sends a TLP one sequence number ahead");
+    ChkFault(FAULT_TX_SEQ_SKIP);
+    InjectFault(FAULT_TX_SEQ_SKIP, rc_node);
+    FaultReads(pcie, 1, "a read sent one sequence number ahead");
+    stim[S_SEQ_SKIP]++;
+
+    // A read with a bad ECRC (the LCRC good): without AER, ECRC checking
+    // cannot be enabled, so the endpoint answers it as usual (2.7.1)
+    {
+        FaultMark("the RC sends a read with a bad ECRC");
+        int        tag = tx_tag++ & 0x1f;
+        PktData_t *p   = pcie->memReadDigest(bar_base[0] + 0x10, 4, tag, FW_REQUESTER_ID, true, true);
+        int        at  = 3 + ((p[TLP_TYPE_BYTE_OFFSET] & 0x20) ? 16 : 12);   // after the header: no data
+        p[at] ^= 0xff;
+        CalcLcrc(p);
+        pcie->sendPacket();
+        WaitForCpl(tag, 4, "a read with a bad ECRC");
+        stim[S_BAD_ECRC]++;
+    }
+
+    // An Ack for a TLP the endpoint never sent: a Data Link Protocol Error,
+    // discarded, logged Fatal (3.5.2.1, 6.2.7); the link goes on
+    FaultMark("the RC Acks a TLP the endpoint never sent");
+    ChkFault(CHK_FAULT_ACK_UNSENT);
+    SendAck((ChkEpNextSeq() + 100) & 0xfff, rc_node);
+    FaultReads(pcie, 2, "a read after an Ack for a TLP never sent");
+    stim[S_ACK_UNSENT]++;
+
     // The endpoint's Correctable errors (Bad TLP, Bad DLLP, Replay Timer
     // Timeout): Correctable Error Detected in Device Status (CFG.ERR-STATUS)
     for (uint32_t ptr = CfgSweepRd(pcie, 0x34) & 0xfc, n = 0; n < 48 && ptr >= 0x40; n++)
@@ -1242,7 +1288,7 @@ static void Retrain(pcieModelClass *pcie)
 //-------------------------------------------------------------
 // Mix()
 //
-// The tester (not A7RC=1): the BARs filled, then MIX_COUNT memory writes and reads at random to the
+// The tester (not A7RC=1): the BARs filled, then mix_count memory writes and reads at random to the
 // placed BARs (their first EP_SCRATCH_BYTES): 1 byte to Max_Payload_Size
 // (writes) or Max_Read_Request_Size (reads), any byte address, so partial
 // Byte Enables, some ending at a 4 KB boundary, none crossing it (2.2.7).
@@ -1251,11 +1297,13 @@ static void Retrain(pcieModelClass *pcie)
 // TL.ORDER the data, TL.CPL-FIELDS the splits.
 //-------------------------------------------------------------
 
-#define MIX_COUNT             64
-#define MIX_MAX_OUT           32              // tags 0-31: Extended Tag Field off
+#define MIX_COUNT             64              // the default; make MIX=N (A7RC_MIX), read at run time
+#define MIX_MAX_OUT          32              // tags 0-31: Extended Tag Field off
 #define MIX_GAP_MAX_TICKS     500             // up to 2 us at Gen1
 #define MIX_MPS_BYTES         128             // the RC leaves Device Control at its defaults
 #define MIX_MRRS_BYTES        512
+
+static int mix_count = MIX_COUNT;
 
 static void Mix(pcieModelClass *pcie)
 {
@@ -1303,7 +1351,7 @@ static void Mix(pcieModelClass *pcie)
     auto nbusy = [&]() { int n = 0; for (int t = 0; t < MIX_MAX_OUT; t++) { n += busy(t); } return n; };
 
     int burst = 0;                            // requests left in a burst: mostly reads, no gaps
-    for (int n = 0; n < MIX_COUNT; n++)
+    for (int n = 0; n < mix_count; n++)
     {
         if (!burst && !Rand(8))
         {
@@ -1416,6 +1464,21 @@ extern "C" void VUserMain2(int node)
     uint32_t    seed     = seed_env ? strtoul(seed_env, NULL, 10) : 1;
     rng.seed(seed);
     VPrint("===> RC model: seed %u (make SEED=N)\n", seed);
+
+#if !A7RC_LITERAL
+    // Mix()'s length: sustained load, as on hardware (make MIX=N; default
+    // MIX_COUNT). Printed only when changed, so default runs log as before
+    const char *mix_env = getenv("A7RC_MIX");
+    mix_count           = mix_env ? (int)strtol(mix_env, NULL, 10) : MIX_COUNT;
+    if (mix_count < 0)
+    {
+        mix_count = 0;
+    }
+    if (mix_count != MIX_COUNT)
+    {
+        VPrint("===> RC model: %d mix requests (make MIX=N)\n", mix_count);
+    }
+#endif
 
     // Electrically idle until Detect is done, as the Artix-7 RC; a PIPE link,
     // as the endpoint (VUserMain1.cpp), or the serial line (make IFACE=serial)

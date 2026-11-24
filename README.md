@@ -7,7 +7,7 @@
 [![Verilator:Pass](https://badgen.net/badge/Verilator/Pass/green)](#self-test)
 [![Icarus:x1](https://badgen.net/badge/Icarus/x1%20only/orange)](#self-test)
 [![XSIM:Pass](https://badgen.net/badge/XSIM/Pass/green)](#self-test)
-[![JanusHDL:WIP](https://badgen.net/badge/JanusHDL/WIP/orange)](https://que.no/janushdl/)
+[![JanusHDL:YES](https://badgen.net/badge/JanusHDL/YES/green)](#self-test)
 [![WaveCrux:YES](https://badgen.net/badge/WaveCrux/YES/green)](https://wavecrux.app)
 [![Verible:YES](https://badgen.net/badge/Verible/YES/green)](https://github.com/chipsalliance/verible)
 
@@ -49,7 +49,7 @@ This VIP is used within [openPCIE](https://github.com/chili-chips/openPCIE) (Art
 | Role | Root Complex or Endpoint |
 | Link | x1 or x4; Gen1 (2.5 GT/s) or Gen2 (5 GT/s) |
 | Attach to | another model on the line, an RTL MAC (PHY side of PIPE) or a PIPE PHY (MAC side of PIPE): [three ways](2.rtl/README.md#three-ways-to-attach-pcievhost) |
-| Simulators | Verilator, Vivado XSIM, JanusHDL (DPI-C); Icarus (VPI, x1 wrappers) |
+| Simulators | Verilator, Vivado XSIM, JanusHDL (DPI-C); Icarus (VPI, x1) |
 | FPGAs | AMD Artix-7 (openPCIE), Cologne Chip GateMate (openCologne-PCIE) |
 
 ### How is it made?!
@@ -104,11 +104,11 @@ How the model attaches to a design, what it exposes, how to build it: [integrati
 
 | Path | What | License |
 |---|---|---|
-| `2.rtl/` | [integration notes](2.rtl/README.md): three ways to attach, taps, VProc and mem_model, timescale, build defines. Our SystemVerilog: `PIPExN__pcieVHost.sv` (x1/x4, Gen1/Gen2), `pcieVHostPipexN.sv` (our PIPE wrapper for N lanes, derived from upstream's `pcieVHostPipex1`), `PIPEx1__pcieVHost.sv` and `RCPIPEx1__pcieVHost.sv` (x1 Gen1), `pipe_mac_adapter.sv` (MAC side of PIPE), `pipe_phy_core.sv` (PHY side of PIPE), `pipe_sym_pkg.sv`, `pipe_x4_view.sv`, `mem_model.sv` | BSD-3-Clause; `pcieVHostPipexN.sv`, `mem_model.sv` GPL-3.0-or-later |
+| `2.rtl/` | [integration notes](2.rtl/README.md): three ways to attach, taps, VProc and mem_model, timescale, build defines. Our SystemVerilog: `PIPExN__pcieVHost.sv` (x1/x4, Gen1/Gen2), `pcieVHostPipexN.sv` (our PIPE wrapper for N lanes, derived from upstream's `pcieVHostPipex1`), `PIPEx1__pcieVHost.sv` and `RCPIPEx1__pcieVHost.sv` (x1 Gen1), `pipe_mac_adapter.sv` (MAC side of PIPE), `pipe_phy_core.sv` (PHY side of PIPE), `pipe_x4_view.sv`; `openPCIE_BFM_pkg.sv`, what every model shares, in place of upstream's `` `include `` headers and macros | BSD-3-Clause; `pcieVHostPipexN.sv`, `openPCIE_BFM_pkg.sv` GPL-3.0-or-later |
 | `3.sw/a7rc/` | [the Artix-7 RC model and its 59 rules](3.sw/a7rc/README.md): `VUserMain2.cpp` (VProc node 2), its checker `a7rc_check.cpp`, `ep_dma.h` | BSD-3-Clause |
 | `3.sw/ltssm/` | the LTSSM helper both nodes link in: `ltssm.c` (ours), `ltssm.c.orig` (upstream), `ltssm-openpcie.patch` | GPL-3.0-or-later |
 | `1.upstream/` | [what we changed in upstream](1.upstream/README.md), and the issues fixed | BSD-3-Clause |
-| `1.upstream/patches/` | our changes to upstream: `pcievhost-taps.patch` (applied at import), `pcievhost-speed.patch`, `vproc-coroutine.patch`, `f_VProc-vinit.patch` (applied at build) | GPL-3.0-or-later |
+| `1.upstream/patches/` | our changes to upstream: `pcievhost-taps.patch` (applied at import), `pcievhost-speed.patch`, `vproc-coroutine.patch`, `f_VProc.patch`, `f_mem_model.patch` (applied at build) | GPL-3.0-or-later |
 | `1.upstream/vip/` | upstream copies: VProc, pcieVHost, mem_model ([versions](1.upstream/vip/README.md)) | GPL-3.0-or-later |
 | `4.build/` | `vip-import.sh` (upstream to `1.upstream/vip/`), `build-vip.sh` (libraries and HDL), `regress.sh` (seeds), `wavecrux.py` (a run in WaveCrux at the first violation), `wavecrux-session.py` (a WaveCrux session for a dump), `lint.verible` (the lint rules) | BSD-3-Clause |
 | `5.sim-regression/` | the self-test: the RC model against the Endpoint model, back to back; sanity and regression lists | BSD-3-Clause |
@@ -122,7 +122,7 @@ Two pcieVHost nodes on one PIPE link: the Artix-7 RC model (node 2) against an E
 ```sh
 cd 5.sim-regression
 make run                  # Verilator (default)
-make SIM=icarus WRAP=x1 run   # Icarus runs the x1 wrappers only
+make SIM=icarus run          # Icarus: x1 only (default or WRAP=x1)
 make SIM=xsim run         # Vivado simulator
 make SIM=janushdl run     # JanusHDL (jhdl)
 make all-sims             # each simulator, one line each
@@ -133,31 +133,29 @@ make lint                 # Verible on our SystemVerilog (4.build/lint.verible)
 make clean                # removes work/
 ```
 
-`make all-sims` uses the default `WRAP=n`, which Icarus cannot run: it reports FAIL. `make all-sims WRAP=x1` runs all four on the x1 Gen1 wrappers.
+`make all-sims` runs all four on the default x1 Gen2 configuration; `make all-sims WRAP=x1` on the x1 wrappers.
 
 Options: `LANES=1|4`, `GEN=1|2`, `PHY=none|core` (`core`: the RC model is the MAC of `pipe_mac_adapter.sv` over `pipe_phy_core.sv`), `WRAP=n|x1` (`x1`: the x1 Gen1 wrappers), `A7RC=0|1` (tester or literal), `SEED=N`. Builds, logs and runs go to `work/` (git-ignored).
 
 - **Sanity** (`make sanity`, after every change): 7 runs, about 3 minutes. Verilator default, `LANES=4`, `PHY=core`, `A7RC=1`; Icarus `WRAP=x1`; XSIM and JanusHDL default.
 - **Regression** (`make regression`, before a push): each simulator in 8 configurations (default, `WRAP=x1`, `WRAP=x1 A7RC=1`, `LANES=4`, `PHY=core`, `LANES=4 PHY=core`, `A7RC=1`, `GEN=1`), the same `===>` lines at `WRAP=x1` on all four, 10 seeds on Verilator; about 6 minutes.
-- The runs that do not work yet (Icarus but `WRAP=x1`; JanusHDL `LANES=4`, `PHY=core`; table below) are listed as known: they do not fail the list, and pass it once fixed.
+- The runs that do not work yet (Icarus `LANES=4` and `PHY=core`; table below) are listed as known: they do not fail the list, and pass it once fixed.
 
 Results (WSL2 Ubuntu 24.04, run time without the build; `WRAP=x1` is x1 Gen1, `LANES=4` Gen1; 🟢 passes, 🟠 partly, 🔴 does not run). Within a column, every PASS prints the same `===>` lines (faults, rule counts, result):
 
 | Simulator | default | `WRAP=x1` | `LANES=4` | `PHY=core` |
 |---|---|---|---|---|
 | 🟢 Verilator 5.055 | PASS, 1.9 s | PASS, 1.6 s | PASS, 2.5 s | PASS, 1.9 s |
-| 🟠 Icarus 14.0 (devel) | no: `PIPExN__pcieVHost.sv` does not parse (automatic variable in an `always`, [iverilog#1789](https://github.com/steveicarus/iverilog/issues/1789)) | PASS, 4.2 s | no, as default | no, as default |
-| 🟢 Vivado XSIM 2026.1 | PASS, 8.1 s | PASS, 7.8 s | PASS, 9.8 s | PASS, 10.0 s |
-| 🟠 JanusHDL 0.17.0 | PASS, 32 s | PASS, 27 s | no: a cast in `pcieVHostPipexN.sv` not supported at run time | no: `pipe_mac_adapter.sv` assertions do not parse |
+| 🟠 Icarus 14.0 (devel) | PASS, 10 s | PASS, 4.2 s | no: a loop index on the outer dimension of a packed array (`pcieVHostPipexN.sv:135`, [iverilog#521](https://github.com/steveicarus/iverilog/issues/521)) | no: no SVA, `assert property` ([iverilog#120](https://github.com/steveicarus/iverilog/issues/120)) |
+| 🟢 Vivado XSIM 2026.2 | PASS, 8.7 s | PASS, 8.4 s | PASS, 9.9 s | PASS, 11.0 s |
+| 🟢 JanusHDL 0.22.0 | PASS, 35 s | PASS, 28 s | PASS, 69 s | PASS, 36 s |
 
 **Open upstream issues behind the results above:**
 
 | Tool | Issue | What | State |
 |---|---|---|---|
-| Icarus Verilog | [iverilog#1789](https://github.com/steveicarus/iverilog/issues/1789), ours [#2](https://github.com/chili-chips/openPCIE_BFM/issues/2) | an `automatic` variable in a static `always` block (`PIPExN__pcieVHost.sv:120`) | open |
-| JanusHDL | [#1](https://github.com/chili-chips/openPCIE_BFM/issues/1) | a size cast by a parameter, `W'(x)`, at run time (`LANES=4`) | open |
-| JanusHDL | [openCologne-PCIE#1](https://github.com/chili-chips/openCologne-PCIE/issues/1) | no assertions yet; a labelled one gives a parse error (`PHY=core`) | open |
-| JanusHDL | [#3](https://github.com/chili-chips/openPCIE_BFM/issues/3) | no command-line default timescale; `+timescale+` ignored: always 1ns/1ps | open |
+| Icarus | [iverilog#521](https://github.com/steveicarus/iverilog/issues/521) | a loop index on the outer dimension of a packed array (`LANES=4`) | open |
+| Icarus | [iverilog#120](https://github.com/steveicarus/iverilog/issues/120) | no SVA, `assert property` (`PHY=core`) | open (feature request) |
 
 JanusHDL has no public tracker (closed source, so it can read encrypted IP): its issues are in our repos, under the [`JanusHDL` label](https://github.com/issues?q=org%3Achili-chips+label%3AJanusHDL).
 
@@ -187,7 +185,7 @@ Then, as `5.sim-regression/Makefile` does:
 
 1. Build the VIP once: `VIP_DIR=$(VIP_PATCH=<bfm>/1.upstream/patches/pcievhost-speed.patch VPROC_PATCH=<bfm>/1.upstream/patches/vproc-coroutine.patch bash <bfm>/4.build/build-vip.sh)`. It prints the directory with `lib/` (DPI-C: `libcosimlnx.a`, `libpcielnx.a`; VPI: `libcosimica.a`, `libpcieica.a`), `include/` and `hdl/`.
 2. Compile your node programs with `3.sw/ltssm/ltssm.c` and, for the RC model, `3.sw/a7rc/VUserMain2.cpp` and `3.sw/a7rc/a7rc_check.cpp`. Defines: `-DVPROC -DEXCLUDE_LTSSM`, plus `-DVPROC_SV` (Verilator, XSIM, JanusHDL) or `-DICARUS`.
-3. Compile the HDL from `$VIP_DIR/hdl` and `2.rtl/`, with `+define+VPROC_BYTE_ENABLE` (and `VPROC_SV` but on Icarus). The top module must be `tb` with a task `Fatal`: pcieVHost calls `tb.Fatal`. No `` `timescale `` in the HDL: pass one on the command line ([per simulator](2.rtl/README.md#timescale)).
+3. Compile `2.rtl/openPCIE_BFM_pkg.sv` first, then the HDL from `$VIP_DIR/hdl` and `2.rtl/`: no include path, no defines, any top-module name. No `` `timescale `` in the HDL: pass one on the command line ([per simulator](2.rtl/README.md#timescale)).
 4. Your project keeps its own: test benches, socket wrappers around these models, Endpoint programs, waveform views of the DUT.
 
 An Endpoint other than ours tells the RC model what to expect with `-DA7RC_EP_EXPECT='"file.h"'` (IDs and BAR sizes; see `3.sw/a7rc/VUserMain2.cpp`).
@@ -218,6 +216,15 @@ The PIPE adapters and the Artix-7 RC model are by Chili.CHIPS; this repository i
 - [openPCIE](https://github.com/chili-chips/openPCIE): the RC model against the AMD `PCIE_2_1` hard macro, at x1 and x4, Gen1 and Gen2.
 - [openCologne-PCIE](https://github.com/chili-chips/openCologne-PCIE): the RC model against an open-source GateMate Endpoint, at the PIPE and on the serial line.
 
+Used outside them too: the [GateMate port of pci_eerie](https://github.com/goran-mahovlic/pci_eerie/tree/gatemate-w8/gatemate) (Goran Mahovlić, Intergalaktik), on the serial line with [openSERDES_BFM](https://github.com/chili-chips/openSERDES_BFM). The rules found four bugs in that Endpoint before its first link on the board ([post, 2026-11-19](https://lnkd.in/p/gkBUxmdS)):
+
+| Rule | Found | State |
+|---|---|---|
+| `PL.SKP` | two SKP Ordered Sets per interval (64-bit PIPE word alignment) | fixed |
+| `FC.UPDATE-PERIOD` | UpdateFC every 48 µs: the timer assumed a 62.5 MHz clock | fixed |
+| `FC.INIT-ORDER` | InitFC1 to InitFC2: the type counter not restarted (upstream pci_eerie) | fixed |
+| `DL.ACK-LAT` | Ack latency 3288 ns under load, limit 2588 ns | open: the likely cause of its data errors under load on the board |
+
 The RC model is calibrated against the AMD (Xilinx) 7 Series `PCIE_2_1` hard macro and its user guide, [UG477](https://docs.xilinx.com/v/u/en-US/ug477_7Series_IntBlock_PCIe): its link training, timing and request behaviour were measured on the hard macro and modelled after it.
 
 #### References
@@ -241,16 +248,22 @@ The RC model is calibrated against the AMD (Xilinx) 7 Series `PCIE_2_1` hard mac
 
 | Tool / project | Issue | What | State |
 |---|---|---|---|
-| Icarus Verilog | [iverilog#1789](https://github.com/steveicarus/iverilog/issues/1789), ours [#2](https://github.com/chili-chips/openPCIE_BFM/issues/2) | an `automatic` variable in a static `always` block (`PIPExN__pcieVHost.sv:120`) | open |
-| JanusHDL | [#1](https://github.com/chili-chips/openPCIE_BFM/issues/1) | 0.17.0: a size cast by a parameter, `W'(x)`, at run time (`LANES=4`) | open |
-| JanusHDL | [openCologne-PCIE#1](https://github.com/chili-chips/openCologne-PCIE/issues/1) | 0.17.0: no assertions yet; a labelled one gives a parse error (`PHY=core`) | open |
-| JanusHDL | [#3](https://github.com/chili-chips/openPCIE_BFM/issues/3) | 0.17.0: no command-line default timescale; `+timescale+` ignored: always 1ns/1ps | open |
+| Icarus Verilog | [iverilog#1789](https://github.com/steveicarus/iverilog/issues/1789), ours [#2](https://github.com/chili-chips/openPCIE_BFM/issues/2) | an `automatic` variable in a static `always` block (`PIPExN__pcieVHost.sv:120`) | closed (fixed on master) |
+| JanusHDL | [#1](https://github.com/chili-chips/openPCIE_BFM/issues/1) | 0.17.0: a size cast by a parameter, `W'(x)`, at run time (`LANES=4`) | closed (fixed in 0.20.0) |
+| JanusHDL | [openCologne-PCIE#1](https://github.com/chili-chips/openCologne-PCIE/issues/1) | 0.17.0: no assertions yet; a labelled one gives a parse error (`PHY=core`) | assertions fixed in 0.18.0; the issue stays open for other items |
+| JanusHDL | [#3](https://github.com/chili-chips/openPCIE_BFM/issues/3) | 0.17.0: no command-line default timescale; `+timescale+` ignored: always 1ns/1ps | closed (fixed in 0.21.0) |
+| JanusHDL | [#5](https://github.com/chili-chips/openPCIE_BFM/issues/5) | 0.21.0: `$fell` after a `disable iff` reset compares with a stale value (`PHY=core`) | closed (fixed in 0.22.0) |
 | Verilator | [verilator#9240](https://github.com/verilator/verilator/issues/9240), ours [#4](https://github.com/chili-chips/openPCIE_BFM/issues/4) | a time literal finer than the time precision is not rounded (`1ps` at 1ns/10ps); our clocks no longer depend on it | closed: Verilator keeps the literal, as XSIM does, and now warns (`TIMEPRECTRUNC`, on master, not yet released) |
 
 JanusHDL has no public tracker (closed source, so it can read encrypted IP): its issues are in our repos, under the [`JanusHDL` label](https://github.com/issues?q=org%3Achili-chips+label%3AJanusHDL).
 
-Our posts so far:
+A sampler of relevant posts:
 - [2026-11-19, LinkedIn (pci_eerie)](https://lnkd.in/p/gkBUxmdS)
+- [2026-11-20, LinkedIn (End2End sim of PCIE link between Lattice and GateMate)](https://lnkd.in/p/gpXvyHxD)
+
+<div align="center">
+  <img width="80%" alt="Lab view of a solid End2End sim" src="0.doc/images/lab-view-of-solid-end2end-sim.png">
+</div>
 
 ---
 ---

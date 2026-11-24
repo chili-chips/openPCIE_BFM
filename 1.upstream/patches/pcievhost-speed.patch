@@ -32,7 +32,7 @@
      int Raw, Control;
 --- a/src/pcie.h
 +++ b/src/pcie.h
-@@ -178,6 +178,20 @@
+@@ -178,6 +178,23 @@
  #define MAX_RAW_PKT_SIZE                  4125
  #define NULLACK                           9999
  
@@ -42,6 +42,9 @@
 +#define FAULT_TX_BAD_LCRC                 0x2   // the next new TLP goes out with a bad LCRC (the replay is good)
 +#define FAULT_TX_DUP                      0x4   // keep a copy of the next new TLP: SendDuplicate() sends it again
 +#define FAULT_TX_BAD_DLLP                 0x8   // the next DLLP goes out with a bad CRC
++#define FAULT_RX_DROP_NEXT                0x10  // drop the next good TLP: no Ack, no Nak (as if its STP or END were hit)
++#define FAULT_TX_NULLIFY                  0x20  // the next new TLP goes out nullified (LCRC inverted, EDB), then as it is
++#define FAULT_TX_SEQ_SKIP                 0x40  // the next new TLP goes out one sequence number ahead (the LCRC good; the replay is right)
 +
 +// openPCIE: the replay timer, in symbol times: the Max_Payload_Size 128
 +// values of 3.5.2.1, x1 and x4 (Tables 3-4/3-5)
@@ -53,7 +56,7 @@
  #define FC_POST                           0
  #define FC_NONPOST                        1
  #define FC_CMPL                           2
-@@ -396,6 +410,11 @@
+@@ -396,6 +413,11 @@
  typedef void (*callback_t)(pPkt_t, int, void *);
  typedef void (*os_callback_t)(int, int, pTS_t, void *);
  
@@ -65,7 +68,7 @@
  enum config_e {
      CONFIG_FC_HDR_RATE                         = 0,
      CONFIG_FC_DATA_RATE,
-@@ -556,6 +575,13 @@
+@@ -556,6 +578,13 @@
  EXTERN void       WaitForCompletionN      (const uint32_t count,          const int node);
  EXTERN void       InitialisePcie          (const callback_t    cb_func, void *usrptr, const int node);
  EXTERN void       RegisterOsCallback      (const os_callback_t cb_func, const int node);
@@ -79,7 +82,7 @@
  EXTERN uint32_t   GetCycleCount           (const int node);
  EXTERN void       ConfigurePcie           (const config_t type, const int value, const int node);
  
-@@ -569,6 +595,14 @@
+@@ -569,6 +598,14 @@
  EXTERN void       PcieSeed                (const uint32_t seed, const int node);
  EXTERN void       SetTxEnabled            (const int      node);
  EXTERN void       SetTxDisabled           (const int      node);
@@ -131,7 +134,7 @@
  
      // Ordered set and Training sequence reception state
      LinkEventCount_t linkevent;
-@@ -261,6 +282,26 @@
+@@ -261,6 +282,29 @@
      bool             draining_queue;
      bool             tx_disabled;
  
@@ -151,6 +154,9 @@
 +    int              fault;
 +    pPkt_t           corrupt_p;
 +    pPkt_t           dup_copy;         // FAULT_TX_DUP: a copy of a TLP sent, for SendDuplicate()
++    PktData_t       *alt_data;         // FAULT_TX_NULLIFY, FAULT_TX_SEQ_SKIP: corrupt_p as it goes on the wire
++    bool             alt_again;        // ... FAULT_TX_NULLIFY: then sent again as it is
++    int              last_tx_seq;      // the newest TLP sent: an Ack or Nak after it is a Data Link Protocol Error
 +
 +    // openPCIE: no UpdateFC before this cycle (HoldFc())
 +    uint32_t         fc_hold_until;
@@ -158,7 +164,7 @@
  } PcieModelState_t, *pPcieModelState_t;
  
  // -------------------------------------------------------------------------
-@@ -287,6 +328,7 @@
+@@ -287,6 +331,7 @@
  void        AddPktToQueue        (const pPcieModelState_t const state, const pPkt_t const packet);
  void        AddPktToQueueDelay   (const pPcieModelState_t const state, const pPkt_t const packet);
  void        ExtractPhyInput      (const pPcieModelState_t const state, const uint32_t* const rawlinkin);
@@ -289,15 +295,15 @@
 +        // already queued go out meanwhile, and again in the replay
 +        if (this->curr_nak != NULLACK && TS_SKP_A7RC(node) && this->LinkWidth == 1 && GetLinkSpeed(node) == 2 &&
 +            !this->nak_wait)
-         {
--            this->send_p = this->head_p;
--            while (this->send_p->seq > this->curr_nak)
++        {
 +            this->nak_wait = true;
 +            this->nak_seen = GetCycleCount(node);
 +        }
 +        if (this->curr_nak != NULLACK &&
 +            !(this->nak_wait && (int32_t)(GetCycleCount(node) - this->nak_seen) < A7RC_NAK_REPLAY_TICKS))
-+        {
+         {
+-            this->send_p = this->head_p;
+-            while (this->send_p->seq > this->curr_nak)
 +            this->nak_wait = false;
 +            while ((this->head_p != NULL && this->head_p != this->send_p) &&
 +                   ((this->head_p->seq != DLLP_SEQ_ID && ((this->curr_nak - this->head_p->seq) & 0xfff) < 2048) ||
@@ -396,10 +402,11 @@
          // Loop through lanes
          for (lanes = 0; lanes < this->LinkWidth; lanes++)
          {
-@@ -186,14 +317,40 @@
+@@ -186,14 +317,70 @@
              }
              else
              {
+-                LinkOut[lanes] = this->send_p->data[idx++];
 +                // openPCIE: a one-shot fault picks the packet as it starts
 +                if (idx == 0 && this->fault && this->corrupt_p == NULL)
 +                {
@@ -410,11 +417,41 @@
 +                        this->fault    &= tlp ? ~FAULT_TX_BAD_LCRC : ~FAULT_TX_BAD_DLLP;
 +                        this->corrupt_p = this->send_p;
 +                    }
++                    // openPCIE: a copy for the wire: nullified (the LCRC
++                    // inverted, EDB for END: 3.5.2.1), or one sequence number
++                    // ahead with its LCRC (the receiver Naks: 3.5.3.1)
++                    else if (tlp && (this->fault & (FAULT_TX_NULLIFY | FAULT_TX_SEQ_SKIP)))
++                    {
++                        bool null = (this->fault & FAULT_TX_NULLIFY) != 0;
++                        int  n    = 0;
++                        while (this->send_p->data[n++] != PKT_TERMINATION)
++                        {
++                        }
++                        this->fault   &= null ? ~FAULT_TX_NULLIFY : ~FAULT_TX_SEQ_SKIP;
++                        this->alt_data = malloc(n * sizeof(PktData_t));
++                        memcpy(this->alt_data, this->send_p->data, n * sizeof(PktData_t));
++                        if (null)
++                        {
++                            for (int i = n - 6; i < n - 2; i++)
++                            {
++                                this->alt_data[i] ^= 0xff;
++                            }
++                            this->alt_data[n - 2] = EDB;
++                        }
++                        else
++                        {
++                            SET_DLLP_SEQ((this->send_p->seq + 1) & 0xfff, this->alt_data);
++                            CalcLcrc(this->alt_data);
++                        }
++                        this->alt_again = null;
++                        this->corrupt_p = this->send_p;
++                    }
 +                }
-                 LinkOut[lanes] = this->send_p->data[idx++];
++                LinkOut[lanes] = (this->send_p == this->corrupt_p && this->alt_data) ? this->alt_data[idx] : this->send_p->data[idx];
++                idx++;
 +
 +                // openPCIE: the CRC inverted on the wire, the stored packet good
-+                if (this->send_p == this->corrupt_p && this->send_p->data[idx] != PKT_TERMINATION)
++                if (this->send_p == this->corrupt_p && !this->alt_data && this->send_p->data[idx] != PKT_TERMINATION)
 +                {
 +                    int end = idx;
 +                    while (this->send_p->data[end] != PKT_TERMINATION)
@@ -438,7 +475,31 @@
  
              // Last lane
              if (lanes == (this->LinkWidth-1))
-@@ -233,10 +390,84 @@
+@@ -222,7 +409,22 @@
+             // At end of packet move to next unless padding
+             if (this->send_p)
+             {
+-                if (!padding && this->send_p->data[idx] == PKT_TERMINATION)
++                // openPCIE: FAULT_TX_NULLIFY: the nullified copy is out (to the
++                // monitor with its EDB); the TLP goes again from its start, as
++                // it is, not yet counted as sent
++                if (!padding && this->send_p == this->corrupt_p && this->alt_again && this->send_p->data[idx] == PKT_TERMINATION)
++                {
++                    if (this->mon_cb != NULL)
++                    {
++                        (this->mon_cb)(this->send_p, 0, 1, this->mon_usrptr);
++                    }
++                    free(this->alt_data);
++                    this->alt_data  = NULL;
++                    this->alt_again = false;
++                    this->corrupt_p = NULL;
++                    idx             = 0;
++                }
++                else if (!padding && this->send_p->data[idx] == PKT_TERMINATION)
+                 {
+                     // At the end of the packet output DLLP/TLP to display
+                     if (this->send_p->data[0] == SDP)
+@@ -233,10 +435,90 @@
                      {
                          DispTl(this, this->send_p, false);
                      }
@@ -453,6 +514,10 @@
 +                    // first TLP of a replay (3.5.2.1)
 +                    if (this->send_p->data[0] == STP)
 +                    {
++                        if (this->send_p->Retry == 1)
++                        {
++                            this->last_tx_seq = this->send_p->seq & 0xfff;
++                        }
 +                        if (this->send_p->Retry == 1 && !this->replay_running)
 +                        {
 +                            this->replay_running = true;
@@ -465,6 +530,8 @@
 +                    }
 +                    if (this->send_p == this->corrupt_p)
 +                    {
++                        free(this->alt_data);               // FAULT_TX_SEQ_SKIP's copy (NULL else)
++                        this->alt_data  = NULL;
 +                        this->corrupt_p = NULL;
 +                    }
 +                    // openPCIE: FAULT_TX_DUP: a copy of a new TLP, for SendDuplicate()
@@ -523,7 +590,7 @@
                      padding = (this->send_p == NULL);
                  }
              }
-@@ -628,6 +859,8 @@
+@@ -628,6 +910,8 @@
      SET_CPL_CID(cid, pkt_p);
      SET_CPL_RID(rid, pkt_p);
      SET_CPL_STATUS(status, pkt_p);
@@ -532,7 +599,7 @@
      SET_CPL_BYTE_COUNT(status ? 4 : CalcByteCount(rlength, fbe, lbe), pkt_p);
      SET_CPL_LOW_ADDR(status ? 0 : (addr | CalcLoAddr(fbe)) & 0x7f, pkt_p);
      SET_DLLP_SEQ(this->seq, pkt_p);
-@@ -1374,7 +1607,7 @@
+@@ -1374,7 +1658,7 @@
  
      // If no Ack pending, or requested Ack is higher than current sequence, generate
      // a new packet and set Ack pointer to it
@@ -541,7 +608,7 @@
      {
  
          // Free up space for superseded Ack
-@@ -1458,12 +1691,14 @@
+@@ -1458,12 +1742,14 @@
  
      // If no Nak pending, or requested Nak is lowest sequence, generate
      // a new packet and set NAK pointer to it
@@ -558,7 +625,7 @@
              CheckFree(this->nak_to_send_p->data);
              CheckFree(this->nak_to_send_p);
          }
-@@ -1571,7 +1806,53 @@
+@@ -1571,7 +1857,53 @@
      packet->Retry = 0;
      packet->ByteCount = 8;
  
@@ -613,7 +680,7 @@
  
      if (!queue)
      {
-@@ -1734,7 +2015,7 @@
+@@ -1734,7 +2066,7 @@
          for (lanes = 0; lanes < this->LinkWidth; lanes++)
          {
              LinkOut[sequence][lanes] = (sequence == 0) ? COM : Type;
@@ -622,7 +689,7 @@
                                      lanes, this->LinkWidth, node), lanes != this->LinkWidth-1, node);
  
              // When the last OS symbol is being output, display the OS
-@@ -1836,7 +2117,9 @@
+@@ -1836,7 +2168,9 @@
              }
              else if (sequence == TS_DATA_RATE_SEQ)
              {
@@ -633,7 +700,7 @@
              }
              else if (sequence == TS_CONTROL_SEQ)
              {
-@@ -1847,7 +2130,7 @@
+@@ -1847,7 +2181,7 @@
                  LinkOut[sequence][lanes] = identifier;
              }
  
@@ -642,7 +709,7 @@
                                                             lanes, this->LinkWidth, node), lanes != this->LinkWidth-1, node);
  
              // When the last TS symbol is being output, display the TS
-@@ -1869,6 +2152,14 @@
+@@ -1869,6 +2203,14 @@
      }
  
      this->draining_queue = old_draining_state;
@@ -657,7 +724,7 @@
  }
  
  void SendTs (const int identifier, const int lane_num, const int link_num, const int n_fts, const int control, const bool is_gen2, const int node)
-@@ -2050,6 +2341,34 @@
+@@ -2050,6 +2392,34 @@
  }
  
  // -------------------------------------------------------------------------
@@ -692,7 +759,7 @@
  // ResetEventCount()
  //
  // Clear count for each lane for give OS/TS type. Returns
-@@ -2491,6 +2810,37 @@
+@@ -2491,6 +2861,37 @@
  }
  
  // -------------------------------------------------------------------------
@@ -730,7 +797,7 @@
  // SetTxDisabled()
  //
  // -------------------------------------------------------------------------
-@@ -2511,6 +2861,113 @@
+@@ -2511,6 +2912,113 @@
  }
  
  // -------------------------------------------------------------------------
@@ -972,7 +1039,32 @@
  
          if (!((idx / 4) % 8))
              VPrint("%s: %s%s", prefixstr, tloffstr, fmtdatastr);
-@@ -608,8 +608,8 @@
+@@ -305,6 +305,13 @@
+     exp_lcrc = ((uint32_t)pkt->data[lcrc_offset+0] << 24) | ((uint32_t)pkt->data[lcrc_offset+1] << 16) | ((uint32_t)pkt->data[lcrc_offset+2] << 8) | ((uint32_t)pkt->data[lcrc_offset+3]);
+     got_lcrc = ((uint32_t)crc[0] << 24) | ((uint32_t)crc[1] << 16) | ((uint32_t)crc[2] << 8) | ((uint32_t)crc[3]);
+ 
++    // openPCIE: the display leaves the packet as received; upstream left the
++    // calculated CRCs in it, so the receiver checked those, not the line's
++    for (int i = 0; i < 4; i++)
++    {
++        pkt->data[lcrc_offset+i] = crc[i];
++    }
++
+     if (TLP_HAS_DIGEST(pkt->data))
+     {
+         unsigned ecrc_offset = lcrc_offset - 4;
+@@ -315,6 +322,10 @@
+         CalcEcrc(pkt->data);
+         exp_ecrc = ((uint32_t)pkt->data[ecrc_offset+0] << 24) | ((uint32_t)pkt->data[ecrc_offset+1] << 16) | ((uint32_t)pkt->data[ecrc_offset+2] << 8) | ((uint32_t)pkt->data[ecrc_offset+3]);
+         got_ecrc = ((uint32_t)ecrc[0] << 24) | ((uint32_t)ecrc[1] << 16) | ((uint32_t)ecrc[2] << 8) | ((uint32_t)ecrc[3]);
++        for (int i = 0; i < 4; i++)
++        {
++            pkt->data[ecrc_offset+i] = ecrc[i];
++        }
+     }
+ 
+     if (tl_td)
+@@ -608,8 +619,8 @@
          uint32_t dllp_word   =  (pkt->data[1]  << 24) | (pkt->data[2]  << 16) | (pkt->data[3]  << 8) | (pkt->data[4]);
          uint32_t tl_word0    =  (pkt->data[3]  << 24) | (pkt->data[4]  << 16) | (pkt->data[5]  << 8) | (pkt->data[6]);
          uint32_t tl_word1    =  (pkt->data[7]  << 24) | (pkt->data[8]  << 16) | (pkt->data[9]  << 8) | (pkt->data[10]);
@@ -1149,7 +1241,7 @@
              flw->ConsumedHdrUpdated[0][FC_POST]  = 0;
              flw->ConsumedDataUpdated[0][FC_POST] = 0;
          }
-@@ -350,9 +396,17 @@
+@@ -350,9 +396,45 @@
  //
  // -------------------------------------------------------------------------
  
@@ -1160,24 +1252,56 @@
 +    return diff != 0 && diff < 2048;
 +}
 +
++// openPCIE: an uncorrectable error of Fatal severity (Data Link Protocol
++// Error): Fatal Error Detected in Device Status (6.2.5, Figure 6-2, no AER)
++static void FatalDetected(const pPcieModelState_t const state)
++{
++    if (state->ur_bit)
++    {
++        WriteConfigSpace(state->ur_reg, ReadConfigSpace(state->ur_reg, state->thisnode) | 0x00040000, state->thisnode);
++    }
++}
++
++// openPCIE: an Ack or Nak for a TLP never sent is a Data Link Protocol Error
++// (3.5.2.1): discarded, and logged as Fatal (default severity, 6.2.7)
++static bool AckNakUnsent(const pPcieModelState_t const state, const int sequence)
++{
++    if (!SeqAfter(sequence, state->last_tx_seq))
++    {
++        return false;
++    }
++    VPrint("ProcessInput: Info --- %sAck/Nak %d for a TLP never sent (newest %d): Data Link Protocol Error%s at node %d\n",
++           fmterrstr, sequence, state->last_tx_seq, fmtnormstr, state->thisnode);
++    FatalDetected(state);
++    return true;
++}
++
  static void AckPkt(const pPcieModelState_t const state, const int sequence)
  {
 -    if (sequence < state->curr_nak && (sequence > state->curr_ack || state->curr_ack == NULLACK))
++    if (AckNakUnsent(state, sequence))
++    {
++        return;
++    }
 +    if ((state->curr_nak == NULLACK || SeqAfter(state->curr_nak, sequence)) &&
 +        (state->curr_ack == NULLACK || SeqAfter(sequence, state->curr_ack)))
      {
          state->curr_ack = sequence;
      }
-@@ -369,7 +423,7 @@
+@@ -369,7 +451,11 @@
  
  static void NakPkt(const pPcieModelState_t const state, const int sequence)
  {
 -    if (sequence < state->curr_nak)
++    if (AckNakUnsent(state, sequence))
++    {
++        return;
++    }
 +    if (state->curr_nak == NULLACK || SeqAfter(state->curr_nak, sequence))
      {
          state->curr_nak = sequence;
      }
-@@ -402,6 +456,56 @@
+@@ -402,6 +488,56 @@
  //
  // -------------------------------------------------------------------------
  
@@ -1234,7 +1358,7 @@
  static bool checkBars(const uint64_t addr, const uint32_t bytelen, const unsigned node)
  {
      uint64_t BAR;
-@@ -467,7 +571,9 @@
+@@ -467,7 +603,9 @@
          uint64_t endaddr = addr + bytelen;
  
          // Check if all addresses are within the BAR's range
@@ -1245,7 +1369,7 @@
          {
              // OK to access if it is.
              ok_to_access = true;
-@@ -485,6 +591,10 @@
+@@ -485,6 +623,10 @@
  // input link. Processes Acks/Naks and flow control DLLPs,
  // and manages local memory reads and writes, generating
  // completions for reads (by calling Completion() ).
@@ -1256,7 +1380,7 @@
  // Returned completions get passed up to user registered
  // callback function.
  //
-@@ -502,6 +612,13 @@
+@@ -502,6 +644,13 @@
  
      // Set an optimistic packet status
      status = PKT_STATUS_GOOD;
@@ -1270,7 +1394,7 @@
  
      // DLLP
      if (pkt->seq == DLLP_SEQ_ID)
-@@ -554,6 +671,7 @@
+@@ -554,6 +703,7 @@
                  }
                  break;
              case DL_UPDATEFC_P:
@@ -1278,7 +1402,7 @@
                  if (state->usrconf.DisableFc)
                  {
                      if (state->vuser_cb != NULL)
-@@ -570,6 +688,7 @@
+@@ -570,6 +720,7 @@
                  }
                  break;
              case DL_UPDATEFC_NP:
@@ -1286,7 +1410,7 @@
                  if (state->usrconf.DisableFc)
                  {
                      if (state->vuser_cb != NULL)
-@@ -586,6 +705,7 @@
+@@ -586,6 +737,7 @@
                  }
                  break;
              case DL_UPDATEFC_CPL:
@@ -1294,7 +1418,7 @@
                  if (state->usrconf.DisableFc)
                  {
                      if (state->vuser_cb != NULL)
-@@ -647,6 +767,7 @@
+@@ -647,6 +799,7 @@
          {
              DebugVPrint( "ProcessInput: Warning --- received bad DLLP on node %d\n", state->thisnode);
              status = PKT_STATUS_BAD_DLLP_CRC;
@@ -1302,7 +1426,7 @@
  
              // Return bad packet to user process, if one registered. Otherwise discard.
              if (state->vuser_cb != NULL)
-@@ -666,6 +787,10 @@
+@@ -666,6 +819,10 @@
          bool ecrc_present  = TLP_HAS_DIGEST(pkt->data);
          bool gen_cmpl_ecrc = ecrc_present && !state->usrconf.DisableEcrcCmpl;
  
@@ -1313,7 +1437,7 @@
          // Check LCRC
          lcrc_offset = 15 + 4 * ((has_data ? GET_TLP_LENGTH(pkt->data) : 0) + (ecrc_present ? 1 : 0) + TLP_HDR_4DW(pkt->data));
          crc[0] = pkt->data[lcrc_offset+0];
-@@ -703,10 +828,14 @@
+@@ -703,10 +860,14 @@
              else
              {
                  VPrint("ProcessInput: Info --- %sTlp LCRC failure%s. Sending NAK from node %d\n", fmterrstr, fmtnormstr, state->thisnode);
@@ -1330,24 +1454,42 @@
                  status |= PKT_STATUS_BAD_LCRC;
              }
  
-@@ -723,6 +852,42 @@
+@@ -723,31 +884,63 @@
              return;
          }
  
+-        // Check ECRC, if present
+-        if (!state->usrconf.DisableCrcChk &&
+-            (ecrc_present && (ecrc[0] != pkt->data[ecrc_offset+0] || ecrc[1] != pkt->data[ecrc_offset+1] ||
+-                              ecrc[2] != pkt->data[ecrc_offset+2] || ecrc[3] != pkt->data[ecrc_offset+3] )))
 +        // openPCIE: the receive rules (3.5.3.1). The expected TLP is Acked and
 +        // taken; a duplicate is Acked and dropped; one after a lost TLP is
 +        // dropped, with one Nak. FAULT_RX_NAK_NEXT treats the expected one as
 +        // bad. Upstream had no NEXT_RCV_SEQ: it took every TLP, also twice
 +        if (!state->usrconf.DisableAck)
-+        {
+         {
+-            VPrint("ProcessInput: Info --- %sTlp ECRC failure at node %d%s\n", fmterrstr, state->thisnode, fmtnormstr);
+-            status |= PKT_STATUS_BAD_ECRC;
+-            if (state->vuser_cb != NULL)
 +            int ahead = (pkt->seq - state->next_rcv_seq) & 0xfff;
++            // openPCIE: FAULT_RX_DROP_NEXT: lost, as if its STP or END were
++            // hit: no Ack, no Nak; the sender replays (3.5.2.1)
++            if (ahead == 0 && (state->fault & FAULT_RX_DROP_NEXT))
+             {
+-                (state->vuser_cb)(pkt, status, state->usrptr);
++                state->fault &= ~FAULT_RX_DROP_NEXT;
++                CheckFree(pkt->data);
++                CheckFree(pkt);
++                return;
+             }
+-            else
 +            if (ahead == 0 && (state->fault & FAULT_RX_NAK_NEXT))
 +            {
 +                state->fault &= ~FAULT_RX_NAK_NEXT;
 +                ahead         = 1;               // as if lost: Nak, drop
 +            }
 +            if (ahead != 0)
-+            {
+             {
 +                if (ahead >= 2048)
 +                {
 +                    SendAck ((state->next_rcv_seq - 1) & 0xfff, state->thisnode);
@@ -1361,32 +1503,35 @@
 +                        state->nak_scheduled = true;
 +                    }
 +                }
-+                CheckFree(pkt->data);
-+                CheckFree(pkt);
+                 CheckFree(pkt->data);
+                 CheckFree(pkt);
 +                return;
-+            }
+             }
+-            return;
 +            state->next_rcv_seq  = (state->next_rcv_seq + 1) & 0xfff;
 +            state->nak_scheduled = false;
 +            SendAck (pkt->seq, state->thisnode);
-+        }
-+
-         // Check ECRC, if present
-         if (!state->usrconf.DisableCrcChk &&
-             (ecrc_present && (ecrc[0] != pkt->data[ecrc_offset+0] || ecrc[1] != pkt->data[ecrc_offset+1] ||
-@@ -742,11 +907,7 @@
-             return;
          }
  
 -        // Good CRC, so send an Ack
 -        if (!state->usrconf.DisableAck)
--        {
++        // Check ECRC, if present
++        if (!state->usrconf.DisableCrcChk &&
++            (ecrc_present && (ecrc[0] != pkt->data[ecrc_offset+0] || ecrc[1] != pkt->data[ecrc_offset+1] ||
++                              ecrc[2] != pkt->data[ecrc_offset+2] || ecrc[3] != pkt->data[ecrc_offset+3] )))
+         {
 -            SendAck (pkt->seq, state->thisnode);
--        }
-+        // Good CRC: Acked above, with the sequence number (openPCIE)
++            // openPCIE: no AER, so ECRC checking cannot be enabled (2.7.1): the
++            // TLP is processed as usual. Upstream dropped it
++            VPrint("ProcessInput: Info --- %sTlp ECRC mismatch at node %d, not checked (no AER)%s\n", fmterrstr, state->thisnode, fmtnormstr);
+         }
  
++        // Good CRC: Acked above, with the sequence number (openPCIE)
++
          // If mem write ...
          if (!state->usrconf.DisableMem && (type == TL_MWR32 || type == TL_MWR64))
-@@ -768,7 +929,22 @@
+         {
+@@ -768,7 +961,22 @@
              length     = GET_TLP_LENGTH(pkt->data);
  
              // Check if address is ok to to use
@@ -1410,7 +1555,7 @@
              {
                  pdata  = (type == TL_MWR32) ? &(pkt->data[TLP_DATA_OFFSET32]) : &(pkt->data[TLP_DATA_OFFSET64]);
                  fbe    = GET_TLP_FBE(pkt->data);
-@@ -808,7 +984,14 @@
+@@ -808,7 +1016,14 @@
              tag        = GET_TLP_TAG(pkt->data);
  
              // Check address is good for an access
@@ -1426,7 +1571,7 @@
              {
                  if (ReadRamByteBlock (addr, buff, length*4, state->thisnode))
                  {
-@@ -817,10 +1000,29 @@
+@@ -817,10 +1032,29 @@
                  }
  
                  int rlen = (length ? length : MAX_PAYLOAD_BYTES/4);
@@ -1457,7 +1602,7 @@
                  PartCompletionLockDelay(0, NULL, CPL_UNSUPPORTED, 0x0, 0x0, 0, 0, tag, cid, rid, is_locked, gen_cmpl_ecrc, state->usrconf.CompletionRate, true, state->thisnode);
              }
  
-@@ -852,7 +1054,10 @@
+@@ -852,7 +1086,10 @@
  
          // Config reads and writes (for Endpoints only)
          }
@@ -1469,7 +1614,7 @@
          {
              addr   = (uint64_t)(pkt->data[TLP_ADDR_OFFSET]   << 24) | (uint64_t)(pkt->data[TLP_ADDR_OFFSET+1] << 16) |
                       (uint64_t)(pkt->data[TLP_ADDR_OFFSET+2] << 8)  | (uint64_t)(pkt->data[TLP_ADDR_OFFSET+3] << 0) ;
-@@ -863,13 +1068,28 @@
+@@ -863,13 +1100,28 @@
              cid               = state->CplId;
              tag               = GET_TLP_TAG(pkt->data);
  
@@ -1499,7 +1644,7 @@
              else
              {
                  // The device completer ID is always updated on config writes
-@@ -893,6 +1113,27 @@
+@@ -893,6 +1145,27 @@
              cid = state->CplId;
              tag = GET_TLP_TAG(pkt->data);
  
@@ -1527,7 +1672,7 @@
              // Accesses, other than messages and memory write accesses, require a completion of some sort,
              // unless specifically disabled or internal memory disabled where all packets get sent to
              // any registered user callback function
-@@ -935,6 +1176,10 @@
+@@ -935,6 +1208,10 @@
                        const pLinkEventCount_t const linkevent, const int lane, const int type, const pTS_t const ts_data,
                        const os_callback_t cb, void* usrptr, const int node)
  {
@@ -1538,7 +1683,7 @@
      if (cb != NULL)
      {
          cb(type, lane, ts_data, usrptr);
-@@ -1050,8 +1295,10 @@
+@@ -1050,8 +1327,10 @@
  {
      pPkt_t pkt1, pkt2;
  
@@ -1551,7 +1696,7 @@
  
      if (pkt1->TimeStamp > pkt2->TimeStamp)
      {
-@@ -1062,7 +1309,8 @@
+@@ -1062,7 +1341,8 @@
          return (-1);
      }
  
@@ -1561,7 +1706,7 @@
  }
  
  // -------------------------------------------------------------------------
-@@ -1527,7 +1775,8 @@
+@@ -1527,7 +1807,8 @@
          // Header 3
          pmem[idx++] = 0;
          pmem[idx++] = 0;
@@ -1571,7 +1716,7 @@
          pmem[idx++] = (addr & ADDR_LO_BYTE_MASK);
  
          // Jump over payload and tail
-@@ -1716,7 +1965,24 @@
+@@ -1716,7 +1997,27 @@
      state->head_p        = state->send_p        = state->end_p = NULL;
      state->ack_to_send_p = state->nak_to_send_p = NULL;
      state->curr_ack      = state->curr_nak      = NULLACK;
@@ -1592,11 +1737,14 @@
 +    state->dup_copy      = NULL;
 +    state->fault         = 0;
 +    state->corrupt_p     = NULL;
++    state->alt_data      = NULL;
++    state->alt_again     = false;
++    state->last_tx_seq   = 0xfff;
 +    state->fc_hold_until = 0;
  
      for (fc_vc = 0; fc_vc < NUM_VIRTUAL_CHANNELS; fc_vc++)
      {
-@@ -1821,8 +2087,20 @@
+@@ -1821,8 +2122,20 @@
      // Remove any previous linkage
      packet->NextPkt = NULL;
  
@@ -1619,7 +1767,7 @@
      {
          state->end_p = state->send_p = state->head_p = packet;
      // Queue has at least one packet
-@@ -1844,6 +2122,7 @@
+@@ -1844,6 +2157,7 @@
              state->NakHolder.NextPkt = packet;
          }
  
@@ -1627,7 +1775,7 @@
          // Point current end of queue NextPkt pointer to
          // the new packet, and then update end_p to the
          // added packet.
-@@ -1910,7 +2189,9 @@
+@@ -1910,7 +2224,9 @@
  
      for (idx = 0; idx < state->LinkWidth; idx++)
      {
@@ -1638,7 +1786,7 @@
  
          // ----- Extracting Ordered Sets/Training Sequences for each lane -----
  
-@@ -1986,6 +2267,19 @@
+@@ -1986,6 +2302,19 @@
                  case  5: linkevent->Tseq[idx].control  = linkin[idx];
                      break;
                  case  6: linkevent->Tseq[idx].id       = linkin[idx];
@@ -1658,7 +1806,7 @@
                      break;
                  case  7: case  8: case  9: case 10:
                  case 11: case 12: case 13: case 14: case 15:
-@@ -2069,12 +2363,18 @@
+@@ -2069,12 +2398,18 @@
                  pkt->data = state->pRxPktData;
                  pkt->seq  = (pkt->data[0] == SDP) ? DLLP_SEQ_ID : ((((pkt->data[1] & 0xff) << 8) | (pkt->data[2] & 0xff)) & 0xfff);
                  pkt->Retry = 0;
@@ -1678,7 +1826,7 @@
              }
          }
      }
-@@ -2107,29 +2407,65 @@
+@@ -2107,29 +2442,65 @@
  
  void TxFcInitInt (const pFlowControl_t const flw, const pUserConfig_t const usrcfg, const int node)
  {
@@ -1752,7 +1900,7 @@
          // Ensure that at least one InitFC2 set is transmitted, even if at INITFC_FI2 already
          if (flw->fc_state[0] == INITFC_FI2 && flw->fc_init_count[0] >= FC_INIT_SENT_MIN)
          {
-@@ -2148,6 +2484,11 @@
+@@ -2148,6 +2519,11 @@
      DebugVPrint("** Received InitFC type %d hdrval=%d dataval=%d rx_fc_state=%d fc_state=%d @ node %d\n",
              type, hdrval, dataval, flw->rx_fc_state[0], flw->fc_state[0], node);
  
@@ -1764,75 +1912,312 @@
      if (type == DL_INITFC1_P || type == DL_INITFC2_P)
      {
          flw->rx_fc_state[0] |= RCVD_P;
---- a/verilog/headers/pciexpress_header.v
-+++ b/verilog/headers/pciexpress_header.v
-@@ -44,6 +44,9 @@
- `define EIE                         8'hfc       // K28.7
- `define RV2                         8'h9c       // K28.4
- `define RV3                         8'hdc       // K28.6
-+// openPCIE: electrical idle on the PIPE, this byte with the K flag. It has no
-+// 8b/10b code, so PCIe never sends it
-+`define NOSIG                       8'hff       // K + 0xFF: no symbol
+--- a/verilog/lib/Serialiser.sv
++++ b/verilog/lib/Serialiser.sv
+@@ -21,37 +21,41 @@
+ //
+ //=============================================================
  
- // Training sequence IDs
- `define TS1_ID                      8'h4a       // D10.2
---- a/verilog/lib/Serialiser.v
-+++ b/verilog/lib/Serialiser.v
-@@ -29,7 +29,7 @@
+-`ifdef VPROC_SV
+-`include "allheaders.svh"
+-`endif
+-
+-`WsTimeScale
++// openPCIE: no `include, no `timescale (the simulator's command line gives
++// it): the symbol codes come from openPCIE_BFM_pkg, compiled first
  
  // With BitReverse = 1'b0, serialisation/deserialisation is lsb.
  
 -module Serialiser (SerClk, BitReverse, ParInVec, SerOut, SerIn, ParOut);
-+module Serialiser (SerClk, BitReverse, ParInVec, SerOut, SerIn, ParOut, RxIdle);
++module Serialiser (SerClk, BitReverse, ParInVec, SerOut, SerOutN, SerIn, ParOut, RxIdle);
++
++import openPCIE_BFM_pkg::*;
  
- parameter Width = 16;
+-parameter Width = 16;
++parameter WIDTH     = 16;
++parameter RX_RETIME = 0;     // openPCIE: 1, the receiver for a partner on its own clock (below)
  
-@@ -40,16 +40,17 @@
- 
- output [Width*10-1:0] ParOut;
- output [Width-1:0]    SerOut;
-+output [Width-1:0]    RxIdle;   // openPCIE: per lane, not synced, so the partner is idle
- 
+ input                 SerClk;
+ input                 BitReverse;
+-input  [Width*10-1:0] ParInVec;
+-input  [Width-1:0]    SerIn;
+-
+-output [Width*10-1:0] ParOut;
+-output [Width-1:0]    SerOut;
+-
 -reg    [9:0]          SerialShift   [0:Width-1];
 -reg    [9:0]          DeserialShift [0:Width-1];
 -reg    [9:0]          DeserialReg   [0:Width-1];
--
++input  [WIDTH*10-1:0] ParInVec;
++input  [WIDTH-1:0]    SerIn;
+ 
 -reg                   Synced;
--
++output [WIDTH*10-1:0] ParOut;
++output [WIDTH-1:0]    SerOut;
++output [WIDTH-1:0]    SerOutN;  // openPCIE: the pair's N: ~SerOut, or 0 with it in electrical idle
++output [WIDTH-1:0]    RxIdle;   // openPCIE: per lane, not synced, so the partner is idle
++
++sym10_t              SerialShift   [WIDTH];
++bit                   SerialIdle    [WIDTH];   // openPCIE: an idle symbol (all 0) on the line
++wire   [WIDTH-1:0]    RxLine;                      // openPCIE: SerIn, or retimed
++sym10_t               DeserialShift [WIDTH];
++sym10_t               DeserialReg   [WIDTH];
++
++bit                   Synced        [WIDTH];   // openPCIE: per lane
++
++int                   SerialCount;
++int                   DeserialCount [WIDTH];
++int                   idx;
+ 
 -integer               SerialCount;
 -integer               DeserialCount;
 -integer               idx;
-+bit    [9:0]          SerialShift   [0:Width-1];
-+bit    [9:0]          DeserialShift [0:Width-1];
-+bit    [9:0]          DeserialReg   [0:Width-1];
-+
-+bit                   Synced        [0:Width-1];   // openPCIE: per lane
-+
-+int                   SerialCount;
-+int                   DeserialCount [0:Width-1];
-+int                   idx;
+-
+-wire [9:0] ParIn [0:Width-1];
++wire [9:0] ParIn [WIDTH];
  
- wire [9:0] ParIn [0:Width-1];
+ function [9:0] BitRev10;
+ input [9:0] InVal;
+@@ -63,19 +67,244 @@
  
-@@ -66,16 +67,24 @@
-     for (i = 0; i < Width; i = i +1)
+ genvar i;
+ generate
+-    for (i = 0; i < Width; i = i +1)
++    for (i = 0; i < WIDTH; i = i +1)
      begin : io
          assign ParIn [i]           = BitReverse ? BitRev10(ParInVec[i*10+9:i*10]) : ParInVec[i*10+9:i*10];
 -        assign ParOut[i*10+9:i*10] = Synced     ? (BitReverse ? BitRev10(DeserialReg[i]) : DeserialReg[i]) : 10'bzzz;
-+        assign ParOut[i*10+9:i*10] = Synced[i]  ? (BitReverse ? BitRev10(DeserialReg[i]) : DeserialReg[i]) : 10'b0000000000;
++        assign ParOut[i*10+9:i*10] = Synced[i]  ? (BitReverse ? BitRev10(DeserialReg[i]) : DeserialReg[i]) : '0;
 +        assign RxIdle[i]           = !Synced[i];
          assign SerOut[i]           = SerialShift[i][0];
++        // openPCIE: P and N; electrical idle is P = N = 0, as a SerDes drives it
++        assign SerOutN[i]          = SerialIdle[i] ? 1'b0 : ~SerialShift[i][0];
++
      end
  endgenerate
  
++//-------------------------------------------------------------
++// openPCIE: RX_RETIME = 1, the receiver for a partner on its own clock, ppm
++// away. Sampled on SerClk (upstream), any offset slips a bit every 1/ppm UI.
++// Here the line is ideal: the bits between two edges are their distance in
++// UI (SerClk's period, one bit per clock). Each lane's bits are aligned on a
++// comma and kept in a symbol buffer; the lanes are read in step, so they stay
++// deskewed, and one decision for all lanes repeats or drops a SKP of a SKP
++// Ordered Set to keep RT_MID symbols. A run past ten bits is electrical idle:
++// it finishes the symbol it ends. One process owns every lane's edges, the
++// buffers and the clock: no fork, no delay.
++//-------------------------------------------------------------
++localparam int        RT_EB  = 16;   // symbols per lane
++localparam int        RT_MID = 4;    // the level kept, give or take one: no dithering
++
++sym10_t               RtBuf    [WIDTH][RT_EB];
++int                   RtWr     [WIDTH];
++int                   RtRd     [WIDTH];
++int                   RtCnt    [WIDTH];
++sym10_t               RtSym    [WIDTH];   // the symbol being built
++int                   RtNb     [WIDTH];   // its bits so far; -1: not aligned
++bit                   RtLvl    [WIDTH];   // the line since its last edge
++bit                   RtIdle   [WIDTH];
++realtime              RtEdge   [WIDTH];   // that edge
++sym10_t               RtCur    [WIDTH];   // the symbol going out
++bit    [WIDTH-1:0]    RtBit;                  // the retimed line
++int                   RtOb;                   // bits of RtCur sent, all lanes
++bit                   RtStarted, RtLastSkp, RtClkQ;
++realtime              RtClkT, RtUi;
++int                   RtSkpAdd, RtSkpDrop, RtUnder, RtOver;   // for the log
++
++assign RxLine = (RX_RETIME != 0) ? RtBit : SerIn;
++
++// a bit of lane l: a symbol every ten, from its comma on
++task automatic rt_push(input int l, input bit b);
++    RtSym[l] = {b, RtSym[l][9:1]};
++    if (is_com(RtSym[l]))
++        RtNb[l] = 10;                            // a comma ends a symbol here
++    else if (RtNb[l] >= 0)
++        RtNb[l] = RtNb[l] + 1;
++    if (RtNb[l] == 10)
++    begin
++        RtNb[l] = 0;
++        if (RtCnt[l] < RT_EB)
++        begin
++            RtBuf[l][RtWr[l]] = RtSym[l];
++            RtWr[l]           = (RtWr[l] + 1) % RT_EB;
++            RtCnt[l]          = RtCnt[l] + 1;
++        end
++        else
++            RtOver = RtOver + 1;
++    end
++endtask
++
++// the next symbol of every lane in use, in step; false if one has none
++function automatic bit rt_ready(input int need);
++    bit any = 1'b0;
++    for (int l = 0; l < WIDTH; l++)
++    begin
++        if (!RtIdle[l] || (RtCnt[l] > 0))
++        begin
++            any = 1'b1;
++            if (RtCnt[l] < need)
++                return 1'b0;
++        end
++    end
++    return any;
++endfunction
++
++task automatic rt_pop();
++    for (int l = 0; l < WIDTH; l++)
++    begin
++        if (RtCnt[l] > 0)
++        begin
++            RtRd[l]  = (RtRd[l] + 1) % RT_EB;
++            RtCnt[l] = RtCnt[l] - 1;
++        end
++    end
++endtask
++
++generate
++if (RX_RETIME != 0)
++begin : rt
++    initial
++    begin
++        for (int l = 0; l < WIDTH; l++)
++        begin
++            RtWr[l]   = 0;
++            RtRd[l]   = 0;
++            RtCnt[l]  = 0;
++            RtSym[l]  = '0;
++            RtNb[l]   = -1;
++            RtLvl[l]  = 1'b0;
++            RtIdle[l] = 1'b1;
++            RtEdge[l] = 0;
++            RtCur[l]  = '0;
++        end
++        RtBit     = '0;
++        RtOb      = 10;
++        RtStarted = 1'b0;
++        RtLastSkp = 1'b0;
++        RtClkQ    = 1'b0;
++        RtClkT    = 0;
++        RtUi      = 0;
++        RtSkpAdd  = 0;
++        RtSkpDrop = 0;
++        RtUnder   = 0;
++        RtOver    = 0;
++    end
++
++    always @(SerIn or SerClk)
++    begin : line
++        realtime now;
++        int      n, ref_l;
++        bit      lead_skp;
++        now = $realtime;
++
++        // a line edge: the run of bits before it
++        for (int l = 0; l < WIDTH; l++)
++        begin
++            if (SerIn[l] != RtLvl[l])
++            begin
++                if (!RtIdle[l] && (RtUi > 0))
++                begin
++                    n = $rtoi((now - RtEdge[l]) / RtUi + 0.5);
++                    for (int k = 0; k < n; k++)
++                        rt_push(l, RtLvl[l]);
++                end
++                else
++                    RtNb[l] = -1;                // out of idle: align again
++                RtIdle[l] = 1'b0;
++                RtEdge[l] = now;
++                RtLvl[l]  = SerIn[l];
++            end
++        end
++
++        if (SerClk && !RtClkQ)                   // a SerClk tick
++        begin
++            // the UI, averaged: the clock's edges are rounded to the time
++            // precision; a step of 20% (a rate change) restarts it
++            if (RtClkT > 0)
++            begin
++                if ((RtUi == 0) || ((now - RtClkT) > 1.2 * RtUi) || ((now - RtClkT) < 0.8 * RtUi))
++                    RtUi = now - RtClkT;
++                else
++                    RtUi = RtUi + ((now - RtClkT) - RtUi) / 16.0;
++            end
++            RtClkT = now;
++
++            // a run past ten bits: electrical idle, after the symbol it ends
++            for (int l = 0; l < WIDTH; l++)
++            begin
++                if (!RtIdle[l] && (RtUi > 0) && ((now - RtEdge[l]) > 10.5 * RtUi))
++                begin
++                    if (RtNb[l] > 0)
++                        for (int k = RtNb[l]; k < 10; k++)
++                            rt_push(l, RtLvl[l]);
++                    RtIdle[l] = 1'b1;
++                    RtNb[l]   = -1;
++                end
++            end
++
++            // the next symbol, every lane in step
++            if (RtOb == 10)
++            begin
++                if (!RtStarted && rt_ready(RT_MID))
++                    RtStarted = 1'b1;
++                if (RtStarted && rt_ready(1))
++                begin
++                    ref_l = 0;
++                    while ((RtCnt[ref_l] == 0) && (ref_l < WIDTH - 1))
++                        ref_l++;
++                    lead_skp = is_skp(RtBuf[ref_l][RtRd[ref_l]]);
++                    // SKPs after a SKP, while too full: drop them, every lane (one stays)
++                    while (lead_skp && RtLastSkp && (RtCnt[ref_l] > RT_MID + 1) && rt_ready(2))
++                    begin
++                        rt_pop();
++                        RtSkpDrop = RtSkpDrop + 1;
++                        lead_skp  = is_skp(RtBuf[ref_l][RtRd[ref_l]]);
++                    end
++                    for (int l = 0; l < WIDTH; l++)
++                        RtCur[l] = (RtCnt[l] > 0) ? RtBuf[l][RtRd[l]] : '0;
++                    // a SKP, and too empty: send it again (no pop), every lane
++                    if (lead_skp && (RtCnt[ref_l] < RT_MID - 1))
++                        RtSkpAdd = RtSkpAdd + 1;
++                    else
++                        rt_pop();
++                    RtLastSkp = lead_skp;
++                    RtOb      = 0;
++                end
++                else
++                begin
++                    if (RtStarted && rt_ready(0))
++                        RtUnder = RtUnder + 1;
++                    RtStarted = 1'b0;
++                    RtLastSkp = 1'b0;
++                end
++            end
++            for (int l = 0; l < WIDTH; l++)
++                RtBit[l] <= (RtOb < 10) ? RtCur[l][RtOb] : 1'b0;   // idle, or starved
++            if (RtOb < 10)
++                RtOb = RtOb + 1;
++        end
++        RtClkQ = SerClk;
++    end
++
++    final
++        $display("Serialiser %m: SKP repeated %0d, dropped %0d; starved %0d, overflowed %0d",
++                 RtSkpAdd, RtSkpDrop, RtUnder, RtOver);
++end
++endgenerate
++
 +// openPCIE: the one model register block left on initial + always: upstream's
 +// Serialiser has no reset port, and it runs on the bit clock from time 0
  initial 
  begin
 -    Synced        = 0;
-+    for (idx = 0; idx < Width; idx = idx + 1)
-+        SerialShift[idx] = 10'b0000000000;   // openPCIE: the line starts idle, not X
-+    for (idx = 0; idx < Width; idx = idx + 1)
++    for (idx = 0; idx < WIDTH; idx = idx + 1)
++    begin
++        SerialShift[idx] = '0;   // openPCIE: the line starts idle, not X
++        SerialIdle[idx]  = 1'b1;
++    end
++    for (idx = 0; idx < WIDTH; idx = idx + 1)
 +    begin
 +        Synced[idx]        = 0;
 +        DeserialCount[idx] = 0;
@@ -1842,23 +2227,28 @@
  end
  
  always @(posedge SerClk) 
-@@ -93,34 +102,36 @@
+@@ -83,44 +312,49 @@
+     if (SerialCount == 0) 
+     begin
+         SerialCount <=  9;
+-        for (idx = 0; idx < Width; idx = idx + 1)
++        for (idx = 0; idx < WIDTH; idx = idx + 1)
++        begin
+             SerialShift[idx] <= ParIn[idx];
++            SerialIdle[idx]  <= (ParIn[idx] == SYM_IDLE);   // openPCIE
++        end
+     end
+     else 
+     begin
+         SerialCount <=  SerialCount - 1;
+-        for (idx = 0; idx < Width; idx = idx + 1)
++        for (idx = 0; idx < WIDTH; idx = idx + 1)
              SerialShift[idx] <= {1'b0, SerialShift[idx][9:1]};
      end
  
-+    // Maintain sync, each lane on its own (openPCIE; upstream: lane 0 for all).
-+    // openPCIE: lose it with the first idle symbol, ten equal bits (an idle
-+    // line is constant; no 8b/10b symbol runs past five), so the last symbol
-+    // before electrical idle stays on ParOut for its symbol time. The same on
-+    // every simulator. Upstream dropped it at the first X or Z bit, 4-state
-+    // simulators only: the model missed that symbol (the last IDL of an EIOS),
-+    // and under Verilator sync was never lost. Re-synced at a comma, the symbol
-+    // is counted from it; upstream kept the count from before the electrical
-+    // idle, so after a re-sync every symbol was cut at the old bit offset
-     for (idx = 0; idx < Width; idx = idx + 1)
-+    begin
-         DeserialShift[idx] <= {SerIn[idx], DeserialShift[idx][9:1]};
- 
+-    for (idx = 0; idx < Width; idx = idx + 1)
+-        DeserialShift[idx] <= {SerIn[idx], DeserialShift[idx][9:1]};
+-
 -    // Maintain sync
 -    if (Synced)
 -    begin
@@ -1871,20 +2261,21 @@
 -`endif
 -    end
 -    else
--    begin
++    // Maintain sync, each lane on its own (openPCIE; upstream: lane 0 for all).
++    // openPCIE: lose it with the first idle symbol, ten equal bits (an idle
++    // line is constant; no 8b/10b symbol runs past five), so the last symbol
++    // before electrical idle stays on ParOut for its symbol time. The same on
++    // every simulator. Upstream dropped it at the first X or Z bit, 4-state
++    // simulators only: the model missed that symbol (the last IDL of an EIOS),
++    // and under Verilator sync was never lost. Re-synced at a comma, the symbol
++    // is counted from it; upstream kept the count from before the electrical
++    // idle, so after a re-sync every symbol was cut at the old bit offset
++    for (idx = 0; idx < WIDTH; idx = idx + 1)
+     begin
 -        if (DeserialShift[0] == `NCOMMA || DeserialShift[0] == `PCOMMA)
 -            Synced <= 1'b1;
 -    end
-+        if (Synced[idx])
-+        begin
-+            if ((DeserialShift[idx] == 10'b0000000000 || DeserialShift[idx] == 10'b1111111111) && DeserialCount[idx] == 9)
-+                Synced[idx] <= 1'b0;
-+        end
-+        else if (DeserialShift[idx] == `NCOMMA || DeserialShift[idx] == `PCOMMA)
-+        begin
-+            Synced[idx]        <= 1'b1;
-+            DeserialCount[idx] <= 0;
-+        end
++        DeserialShift[idx] <= {RxLine[idx], DeserialShift[idx][9:1]};   // openPCIE: SerIn, or retimed
  
 -    if (Synced)
 -    begin
@@ -1892,19 +2283,44 @@
 -    end
 +        if (Synced[idx])
 +        begin
-+            DeserialCount[idx] <= (DeserialCount[idx] + 1) % 10;
++            if ((DeserialShift[idx] == '0 || DeserialShift[idx] == '1) && DeserialCount[idx] == 9)
++                Synced[idx] <= 1'b0;
++        end
++        else if (is_com(DeserialShift[idx]))
++        begin
++            Synced[idx]        <= 1'b1;
++            DeserialCount[idx] <= 0;
 +        end
  
 -    if (DeserialCount == 9 || (!Synced && (DeserialShift[0] == `NCOMMA || DeserialShift[0] == `PCOMMA)))
 -    begin
 -        for (idx = 0; idx < Width; idx = idx + 1)
-+        if (DeserialCount[idx] == 9 || (!Synced[idx] && (DeserialShift[idx] == `NCOMMA || DeserialShift[idx] == `PCOMMA)))
++        if (Synced[idx])
++        begin
++            DeserialCount[idx] <= (DeserialCount[idx] + 1) % 10;
++        end
++
++        if (DeserialCount[idx] == 9 || (!Synced[idx] && is_com(DeserialShift[idx])))
          begin
              DeserialReg[idx] <= DeserialShift[idx];
          end
---- a/verilog/lib/clkmux.v
-+++ b/verilog/lib/clkmux.v
-@@ -38,17 +38,18 @@
+--- a/verilog/lib/clkmux.sv
++++ b/verilog/lib/clkmux.sv
+@@ -21,11 +21,8 @@
+ //
+ //=============================================================
+ 
+-`ifdef VPROC_SV
+-`include "allheaders.svh"
+-`endif
+-
+-`WsTimeScale
++// openPCIE: no `include, no `timescale (the simulator's command line gives
++// it); upstream's own self-test module (`ifdef TEST, unitless delays) removed
+ 
+ module clkmux (
+   input  aresetn,
+@@ -38,17 +35,18 @@
  wire clkagated;
  wire clkbgated;
  
@@ -1928,7 +2344,7 @@
  begin
    if (aresetn == 1'b0)
      selclka_p1 <= 1'b0;
-@@ -56,7 +57,7 @@
+@@ -56,7 +54,7 @@
      selclka_p1 <=  sel & ~selclkb; 
  end
  
@@ -1937,7 +2353,7 @@
  begin
      if (aresetn == 1'b0)
        selclka  <= 1'b0;
-@@ -64,7 +65,7 @@
+@@ -64,7 +62,7 @@
        selclka    <= selclka_p1;
  end
  
@@ -1946,7 +2362,7 @@
  begin
    if (aresetn == 1'b0)
      selclkb_p1 <= 1'b0;
-@@ -72,7 +73,7 @@
+@@ -72,7 +70,7 @@
      selclkb_p1 <= ~sel & ~selclka;
  end
  
@@ -1955,9 +2371,76 @@
  begin
    if (aresetn == 1'b0)
      selclkb    <= 1'b0;
---- a/verilog/pcieVHost/pcieVHost.v
-+++ b/verilog/pcieVHost/pcieVHost.v
-@@ -43,14 +43,15 @@
+@@ -82,51 +80,3 @@
+ 
+ endmodule
+ 
+-`ifdef TEST
+-
+-// ==============================================================
+-// Local test
+-// ==============================================================
+-
+-module test ();
+-
+-wire clkout;
+-
+-reg aresetn;
+-reg clka, clkb;
+-reg sel;
+-
+-initial
+-begin
+-  clka = 1'b0;
+-  clkb = 1'b0;
+-  sel  = 1'b0;  
+-  fork
+-    forever #2500 clka = ~clka;
+-    forever #1000 clkb = ~clkb;
+-  join
+-end
+-
+-  clkmux clkmux_i
+-  (
+-    .aresetn  (aresetn),
+-    .sel      (sel),
+-    .clka     (clka),
+-    .clkb     (clkb),
+-    .clkout   (clkout)
+-  );
+-  
+-initial
+-begin
+-  aresetn        = 1'b0;
+-  #5000  aresetn = 1'b1;
+-  #11000 sel     = 1'b1;
+-  #27000 sel     = 1'b0;
+-  #43000 sel     = 1'b1;
+-  #17000 sel     = 1'b0;
+-  #1000 $stop;
+-end
+-
+-endmodule
+-
+-`endif
+\ No newline at end of file
+--- a/verilog/pcieVHost/pcieVHost.sv
++++ b/verilog/pcieVHost/pcieVHost.sv
+@@ -21,11 +21,8 @@
+ //
+ //=============================================================
+ 
+-`ifdef VPROC_SV
+-`include "allheaders.svh"
+-`endif
+-
+-`WsTimeScale
++// openPCIE: no `include, no `timescale (the simulator's command line gives
++// it): the register map and symbol codes come from openPCIE_BFM_pkg
+ 
+ //-------------------------------------------------------------
+ // PcieVhost
+@@ -43,14 +40,15 @@
  (
    input             Clk,
    input             notReset,
@@ -1978,7 +2461,7 @@
  
    input       [9:0] LinkIn0,   LinkIn1,   LinkIn2,   LinkIn3,
    input       [9:0] LinkIn4,   LinkIn5,   LinkIn6,   LinkIn7,
-@@ -64,41 +65,38 @@
+@@ -64,41 +62,38 @@
    // Transaction taps (openPCIE): each TLP this node sends (Tx) or
    // receives (Rx), one DW per ClkOut with start/end flags, byte 0 in
    // [31:24]; each DLLP as one word. They follow the link, a few clocks late.
@@ -2000,11 +2483,13 @@
 +  output bit        DllpRxValid
  );
  
++import openPCIE_BFM_pkg::*;
++
++// openPCIE: an idle lane sends constant 0 (SYM_IDLE), which no 8b/10b symbol is. The
++// model's state is bit/int: 0 at time 0 on every simulator, never X
  
 -`ifdef VERILATOR
-+// openPCIE: an idle lane sends constant 0, which no 8b/10b symbol is. The
-+// model's state is bit/int: 0 at time 0 on every simulator, never X
- `define ELECIDLE 10'b0000000000
+-`define ELECIDLE 10'b0000000000
 -`else
 -reg   [15:0] ElecIdleOut;
 -`define ELECIDLE 10'bzzzzzzzzzz
@@ -2020,7 +2505,6 @@
 -reg          UpdateResponse;
 -integer      ClkCount;
 -integer      i;
-+
 +bit    [9:0] Out [0:15];
 +bit   [31:0] DataIn;
 +bit          notResetLast;
@@ -2045,7 +2529,7 @@
  
  // VP Interface wires
  wire  [31:0] Addr;
-@@ -116,7 +114,7 @@
+@@ -116,7 +111,7 @@
  wire   [9:0] In [0:15];
  
  wire clk_main;
@@ -2054,7 +2538,7 @@
  
  // --------------------------------
  // Internal clocks
-@@ -130,9 +128,14 @@
+@@ -130,9 +125,14 @@
    else
    begin
      // When using a GEN2 clock, create a half speed clock
@@ -2071,7 +2555,22 @@
      end
  
      // Clock MUX to select between GEN1 and GEN2 clock sources
-@@ -170,18 +173,8 @@
+@@ -156,14 +156,7 @@
+            .Addr           (Addr),
+            .WE             (WE),
+            .RD             (RD),
+-`ifdef VPROC_BYTE_ENABLE
+            .BE             (),
+-`endif
+-`ifdef VPROC_BURST_IF
+-           .Burst          (),
+-           .BurstFirst     (),
+-           .BurstLast      (),
+-`endif
+            .DataOut        (DataOut),
+            .DataIn         (DataIn),
+            .WRAck          (WRAck),
+@@ -178,18 +171,8 @@
  // Combinatorial logic
  // --------------------------------
  
@@ -2092,11 +2591,21 @@
  
  
  // --------------------------------
-@@ -200,31 +193,44 @@
+@@ -200,109 +183,123 @@
+ begin
+     for (i = 0; i < 16; i = i + 1)
+     begin
+-        Out[i]             = 10'h000;
++        Out[i]             = '0;
+     end
+ 
+     InvertIn               = 1'b0;
+     InvertOut              = 1'b0;
      ReverseIn              = 1'b0;
      ReverseOut             = 1'b0;
-     ElecIdleOut            = 16'hffff;
+-    ElecIdleOut            = 16'hffff;
 -    notResetLast           = 1'b0;
++    ElecIdleOut            = '1;
      UpdateResponse         = 1'b1;
 -    ClkCount               = 0;
      Gen2ClkSel             = 1'b0;
@@ -2119,15 +2628,16 @@
 +always_ff @(posedge clk_main or negedge notReset)
 +begin
 +    if (notReset == 1'b0)
-+        notResetLast       <= #`RegDel 1'b0;
++        notResetLast       <= 1'b0;
 +    else
-+        notResetLast       <= #`RegDel notReset;
++        notResetLast       <= notReset;
 +end
 +
 +always_ff @(posedge clk_main)
  begin
 -    notResetLast           <= #`RegDel notReset;
-     ClkCount               <= #`RegDel ClkCount + 1;
+-    ClkCount               <= #`RegDel ClkCount + 1;
++    ClkCount               <= ClkCount + 1;
  end
  
 -// Transaction taps: one queued entry per clock, per stream
@@ -2139,25 +2649,102 @@
  begin
 +    if (notReset == 1'b0)
 +    begin
-+        {TlpTxData,  TlpTxSop, TlpTxEop, TlpTxValid} <= #`RegDel 35'h0;
-+        {TlpRxData,  TlpRxSop, TlpRxEop, TlpRxValid} <= #`RegDel 35'h0;
-+        {DllpTxData, DllpTxValid}                    <= #`RegDel 33'h0;
-+        {DllpRxData, DllpRxValid}                    <= #`RegDel 33'h0;
++        {TlpTxData,  TlpTxSop, TlpTxEop, TlpTxValid} <= '0;
++        {TlpRxData,  TlpRxSop, TlpRxEop, TlpRxValid} <= '0;
++        {DllpTxData, DllpTxValid}                    <= '0;
++        {DllpRxData, DllpRxValid}                    <= '0;
 +    end
 +    else
 +    begin
      if (TlpTxQ.size() != 0)
      begin
-         {TlpTxSop, TlpTxEop, TlpTxData} <= #`RegDel TlpTxQ.pop_front();
-@@ -256,6 +262,7 @@
+-        {TlpTxSop, TlpTxEop, TlpTxData} <= #`RegDel TlpTxQ.pop_front();
+-        TlpTxValid         <= #`RegDel 1'b1;
++        {TlpTxSop, TlpTxEop, TlpTxData} <= TlpTxQ.pop_front();
++        TlpTxValid         <= 1'b1;
      end
      else
-         DllpRxValid        <= #`RegDel 1'b0;
+-        {TlpTxSop, TlpTxEop, TlpTxValid} <= #`RegDel 3'b000;
++        {TlpTxSop, TlpTxEop, TlpTxValid} <= '0;
+ 
+     if (TlpRxQ.size() != 0)
+     begin
+-        {TlpRxSop, TlpRxEop, TlpRxData} <= #`RegDel TlpRxQ.pop_front();
+-        TlpRxValid         <= #`RegDel 1'b1;
++        {TlpRxSop, TlpRxEop, TlpRxData} <= TlpRxQ.pop_front();
++        TlpRxValid         <= 1'b1;
+     end
+     else
+-        {TlpRxSop, TlpRxEop, TlpRxValid} <= #`RegDel 3'b000;
++        {TlpRxSop, TlpRxEop, TlpRxValid} <= '0;
+ 
+     if (DllpTxQ.size() != 0)
+     begin
+-        DllpTxData         <= #`RegDel DllpTxQ.pop_front();
+-        DllpTxValid        <= #`RegDel 1'b1;
++        DllpTxData         <= DllpTxQ.pop_front();
++        DllpTxValid        <= 1'b1;
+     end
+     else
+-        DllpTxValid        <= #`RegDel 1'b0;
++        DllpTxValid        <= 1'b0;
+ 
+     if (DllpRxQ.size() != 0)
+     begin
+-        DllpRxData         <= #`RegDel DllpRxQ.pop_front();
+-        DllpRxValid        <= #`RegDel 1'b1;
++        DllpRxData         <= DllpRxQ.pop_front();
++        DllpRxValid        <= 1'b1;
+     end
+     else
+-        DllpRxValid        <= #`RegDel 1'b0;
++        DllpRxValid        <= 1'b0;
 +    end
  end
  
  always @(Update)
-@@ -291,7 +298,7 @@
+ begin
+-    DataIn = 32'h00000000;
++    DataIn = '0;
+     if (WE === 1'b1 || RD === 1'b1)
+     begin
+         case(Addr)
+-        `NODENUMADDR:        DataIn = Node;
+-        `LANESADDR:          DataIn = Lanes;
+-        `EP_ADDR:            DataIn = EP;
+-        `DISABLE_SCRAMBLING: DataIn = DisableScrambling;
+-        `DISABLE_8B10B:      DataIn = Disable8b10b;
+-        `CLK_COUNT:          DataIn = ClkCount;
+-        `LINKADDR0,  `LINKADDR1,  `LINKADDR2,  `LINKADDR3,
+-        `LINKADDR4,  `LINKADDR5,  `LINKADDR6,  `LINKADDR7,
+-        `LINKADDR8,  `LINKADDR9,  `LINKADDR10, `LINKADDR11,
+-        `LINKADDR12, `LINKADDR13, `LINKADDR14, `LINKADDR15:
++        NODENUMADDR:        DataIn = Node;
++        LANESADDR:          DataIn = Lanes;
++        EP_ADDR:            DataIn = EP;
++        DISABLE_SCRAMBLING: DataIn = DisableScrambling;
++        DISABLE_8B10B:      DataIn = Disable8b10b;
++        CLK_COUNT:          DataIn = ClkCount;
++        LINKADDR0,  LINKADDR1,  LINKADDR2,  LINKADDR3,
++        LINKADDR4,  LINKADDR5,  LINKADDR6,  LINKADDR7,
++        LINKADDR8,  LINKADDR9,  LINKADDR10, LINKADDR11,
++        LINKADDR12, LINKADDR13, LINKADDR14, LINKADDR15:
+         begin
+             if (WE === 1'b1)
+                 Out[Addr%16] = DataOut[9:0];
+             DataIn     = {22'h000000, In[Addr%16]};
+         end
+ 
+-        `RESET_STATE:
++        RESET_STATE:
+         begin
+             DataIn     = {15'h0000, ~notReset};
+         end
+ 
+-        `LINK_STATE:
++        LINK_STATE:
+         begin
+             if (WE === 1'b1)
              begin
                  ElecIdleOut[LinkWidth-1:0] = DataOut[LinkWidth-1:0] ;
              end
@@ -2165,8 +2752,154 @@
 +            DataIn     = {16'h0000, ElecIdleIn};
          end
  
-         `GEN2_CLK:
-@@ -420,8 +427,9 @@
+-        `GEN2_CLK:
++        GEN2_CLK:
+         begin
+             if (WE === 1'b1)
+             begin
+@@ -311,7 +308,7 @@
+             DataIn      = {31'h00000000, Gen2ClkSel};
+         end
+ 
+-        `PVH_INVERT:
++        PVH_INVERT:
+         begin
+             if (WE === 1'b1)
+                 {ReverseOut, ReverseIn, InvertOut, InvertIn} = DataOut[3:0] ;
+@@ -319,24 +316,24 @@
+         end
+ 
+         // Transaction taps (openPCIE)
+-        `TAP_TLP_TX_SOP, `TAP_TLP_TX, `TAP_TLP_TX_EOP:
++        TAP_TLP_TX_SOP, TAP_TLP_TX, TAP_TLP_TX_EOP:
+             if (WE === 1'b1)
+-                TlpTxQ.push_back({Addr == `TAP_TLP_TX_SOP, Addr == `TAP_TLP_TX_EOP, DataOut});
++                TlpTxQ.push_back({Addr == TAP_TLP_TX_SOP, Addr == TAP_TLP_TX_EOP, DataOut});
+ 
+-        `TAP_TLP_RX_SOP, `TAP_TLP_RX, `TAP_TLP_RX_EOP:
++        TAP_TLP_RX_SOP, TAP_TLP_RX, TAP_TLP_RX_EOP:
+             if (WE === 1'b1)
+-                TlpRxQ.push_back({Addr == `TAP_TLP_RX_SOP, Addr == `TAP_TLP_RX_EOP, DataOut});
++                TlpRxQ.push_back({Addr == TAP_TLP_RX_SOP, Addr == TAP_TLP_RX_EOP, DataOut});
+ 
+-        `TAP_DLLP_TX: if (WE === 1'b1) DllpTxQ.push_back(DataOut);
+-        `TAP_DLLP_RX: if (WE === 1'b1) DllpRxQ.push_back(DataOut);
++        TAP_DLLP_TX: if (WE === 1'b1) DllpTxQ.push_back(DataOut);
++        TAP_DLLP_RX: if (WE === 1'b1) DllpRxQ.push_back(DataOut);
+ 
+-        `PVH_STOP:    if (WE === 1'b1) $stop;
+-        `PVH_FINISH:  if (WE === 1'b1) $finish;
+-        `PVH_FATAL:   if (WE === 1'b1) `fatal
++        PVH_STOP:    if (WE === 1'b1) $stop;
++        PVH_FINISH:  if (WE === 1'b1) $finish;
++        PVH_FATAL:   if (WE === 1'b1) $fatal(1, "%m: PVH_FATAL from the C model");
+         default:
+         begin
+             $display("%m: ***Error. PcieVhost---access to invalid address (%h) from VProc", Addr);
+-            `fatal
++            $fatal(1, "%m: access to invalid address %h from VProc", Addr);
+         end
+         endcase
+     end
+@@ -350,39 +347,39 @@
+ // variables for VProc access
+ // --------------------------------
+ 
+-assign #`PcieVHostSampleDel In[0]  = (ReverseIn  ? LinkIn15 : LinkIn0)  ^ {10{InvertIn}};
+-assign #`PcieVHostSampleDel In[1]  = (ReverseIn  ? LinkIn14 : LinkIn1)  ^ {10{InvertIn}};
+-assign #`PcieVHostSampleDel In[2]  = (ReverseIn  ? LinkIn13 : LinkIn2)  ^ {10{InvertIn}};
+-assign #`PcieVHostSampleDel In[3]  = (ReverseIn  ? LinkIn12 : LinkIn3)  ^ {10{InvertIn}};
+-assign #`PcieVHostSampleDel In[4]  = (ReverseIn  ? LinkIn11 : LinkIn4)  ^ {10{InvertIn}};
+-assign #`PcieVHostSampleDel In[5]  = (ReverseIn  ? LinkIn10 : LinkIn5)  ^ {10{InvertIn}};
+-assign #`PcieVHostSampleDel In[6]  = (ReverseIn  ? LinkIn9  : LinkIn6)  ^ {10{InvertIn}};
+-assign #`PcieVHostSampleDel In[7]  = (ReverseIn  ? LinkIn8  : LinkIn7)  ^ {10{InvertIn}};
+-assign #`PcieVHostSampleDel In[8]  = (ReverseIn  ? LinkIn7  : LinkIn8)  ^ {10{InvertIn}};
+-assign #`PcieVHostSampleDel In[9]  = (ReverseIn  ? LinkIn6  : LinkIn9)  ^ {10{InvertIn}};
+-assign #`PcieVHostSampleDel In[10] = (ReverseIn  ? LinkIn5  : LinkIn10) ^ {10{InvertIn}};
+-assign #`PcieVHostSampleDel In[11] = (ReverseIn  ? LinkIn4  : LinkIn11) ^ {10{InvertIn}};
+-assign #`PcieVHostSampleDel In[12] = (ReverseIn  ? LinkIn3  : LinkIn12) ^ {10{InvertIn}};
+-assign #`PcieVHostSampleDel In[13] = (ReverseIn  ? LinkIn2  : LinkIn13) ^ {10{InvertIn}};
+-assign #`PcieVHostSampleDel In[14] = (ReverseIn  ? LinkIn1  : LinkIn14) ^ {10{InvertIn}};
+-assign #`PcieVHostSampleDel In[15] = (ReverseIn  ? LinkIn0  : LinkIn15) ^ {10{InvertIn}};
+-
+-assign LinkOut0   = ElecIdleOut[0]  ? `ELECIDLE : (ReverseOut ? Out[15]  : Out[0])   ^ {10{InvertOut}};
+-assign LinkOut1   = ElecIdleOut[1]  ? `ELECIDLE : (ReverseOut ? Out[14]  : Out[1])   ^ {10{InvertOut}};
+-assign LinkOut2   = ElecIdleOut[2]  ? `ELECIDLE : (ReverseOut ? Out[13]  : Out[2])   ^ {10{InvertOut}};
+-assign LinkOut3   = ElecIdleOut[3]  ? `ELECIDLE : (ReverseOut ? Out[12]  : Out[3])   ^ {10{InvertOut}};
+-assign LinkOut4   = ElecIdleOut[4]  ? `ELECIDLE : (ReverseOut ? Out[11]  : Out[4])   ^ {10{InvertOut}};
+-assign LinkOut5   = ElecIdleOut[5]  ? `ELECIDLE : (ReverseOut ? Out[10]  : Out[5])   ^ {10{InvertOut}};
+-assign LinkOut6   = ElecIdleOut[6]  ? `ELECIDLE : (ReverseOut ? Out[9]   : Out[6])   ^ {10{InvertOut}};
+-assign LinkOut7   = ElecIdleOut[7]  ? `ELECIDLE : (ReverseOut ? Out[8]   : Out[7])   ^ {10{InvertOut}};
+-assign LinkOut8   = ElecIdleOut[8]  ? `ELECIDLE : (ReverseOut ? Out[7]   : Out[8])   ^ {10{InvertOut}};
+-assign LinkOut9   = ElecIdleOut[9]  ? `ELECIDLE : (ReverseOut ? Out[6]   : Out[9])   ^ {10{InvertOut}};
+-assign LinkOut10  = ElecIdleOut[10] ? `ELECIDLE : (ReverseOut ? Out[5]   : Out[10])  ^ {10{InvertOut}};
+-assign LinkOut11  = ElecIdleOut[11] ? `ELECIDLE : (ReverseOut ? Out[4]   : Out[11])  ^ {10{InvertOut}};
+-assign LinkOut12  = ElecIdleOut[12] ? `ELECIDLE : (ReverseOut ? Out[3]   : Out[12])  ^ {10{InvertOut}};
+-assign LinkOut13  = ElecIdleOut[13] ? `ELECIDLE : (ReverseOut ? Out[2]   : Out[13])  ^ {10{InvertOut}};
+-assign LinkOut14  = ElecIdleOut[14] ? `ELECIDLE : (ReverseOut ? Out[1]   : Out[14])  ^ {10{InvertOut}};
+-assign LinkOut15  = ElecIdleOut[15] ? `ELECIDLE : (ReverseOut ? Out[0]   : Out[15])  ^ {10{InvertOut}};
++assign In[0]  = (ReverseIn  ? LinkIn15 : LinkIn0)  ^ {10{InvertIn}};
++assign In[1]  = (ReverseIn  ? LinkIn14 : LinkIn1)  ^ {10{InvertIn}};
++assign In[2]  = (ReverseIn  ? LinkIn13 : LinkIn2)  ^ {10{InvertIn}};
++assign In[3]  = (ReverseIn  ? LinkIn12 : LinkIn3)  ^ {10{InvertIn}};
++assign In[4]  = (ReverseIn  ? LinkIn11 : LinkIn4)  ^ {10{InvertIn}};
++assign In[5]  = (ReverseIn  ? LinkIn10 : LinkIn5)  ^ {10{InvertIn}};
++assign In[6]  = (ReverseIn  ? LinkIn9  : LinkIn6)  ^ {10{InvertIn}};
++assign In[7]  = (ReverseIn  ? LinkIn8  : LinkIn7)  ^ {10{InvertIn}};
++assign In[8]  = (ReverseIn  ? LinkIn7  : LinkIn8)  ^ {10{InvertIn}};
++assign In[9]  = (ReverseIn  ? LinkIn6  : LinkIn9)  ^ {10{InvertIn}};
++assign In[10] = (ReverseIn  ? LinkIn5  : LinkIn10) ^ {10{InvertIn}};
++assign In[11] = (ReverseIn  ? LinkIn4  : LinkIn11) ^ {10{InvertIn}};
++assign In[12] = (ReverseIn  ? LinkIn3  : LinkIn12) ^ {10{InvertIn}};
++assign In[13] = (ReverseIn  ? LinkIn2  : LinkIn13) ^ {10{InvertIn}};
++assign In[14] = (ReverseIn  ? LinkIn1  : LinkIn14) ^ {10{InvertIn}};
++assign In[15] = (ReverseIn  ? LinkIn0  : LinkIn15) ^ {10{InvertIn}};
++
++assign LinkOut0   = ElecIdleOut[0]  ? SYM_IDLE : (ReverseOut ? Out[15]  : Out[0])   ^ {10{InvertOut}};
++assign LinkOut1   = ElecIdleOut[1]  ? SYM_IDLE : (ReverseOut ? Out[14]  : Out[1])   ^ {10{InvertOut}};
++assign LinkOut2   = ElecIdleOut[2]  ? SYM_IDLE : (ReverseOut ? Out[13]  : Out[2])   ^ {10{InvertOut}};
++assign LinkOut3   = ElecIdleOut[3]  ? SYM_IDLE : (ReverseOut ? Out[12]  : Out[3])   ^ {10{InvertOut}};
++assign LinkOut4   = ElecIdleOut[4]  ? SYM_IDLE : (ReverseOut ? Out[11]  : Out[4])   ^ {10{InvertOut}};
++assign LinkOut5   = ElecIdleOut[5]  ? SYM_IDLE : (ReverseOut ? Out[10]  : Out[5])   ^ {10{InvertOut}};
++assign LinkOut6   = ElecIdleOut[6]  ? SYM_IDLE : (ReverseOut ? Out[9]   : Out[6])   ^ {10{InvertOut}};
++assign LinkOut7   = ElecIdleOut[7]  ? SYM_IDLE : (ReverseOut ? Out[8]   : Out[7])   ^ {10{InvertOut}};
++assign LinkOut8   = ElecIdleOut[8]  ? SYM_IDLE : (ReverseOut ? Out[7]   : Out[8])   ^ {10{InvertOut}};
++assign LinkOut9   = ElecIdleOut[9]  ? SYM_IDLE : (ReverseOut ? Out[6]   : Out[9])   ^ {10{InvertOut}};
++assign LinkOut10  = ElecIdleOut[10] ? SYM_IDLE : (ReverseOut ? Out[5]   : Out[10])  ^ {10{InvertOut}};
++assign LinkOut11  = ElecIdleOut[11] ? SYM_IDLE : (ReverseOut ? Out[4]   : Out[11])  ^ {10{InvertOut}};
++assign LinkOut12  = ElecIdleOut[12] ? SYM_IDLE : (ReverseOut ? Out[3]   : Out[12])  ^ {10{InvertOut}};
++assign LinkOut13  = ElecIdleOut[13] ? SYM_IDLE : (ReverseOut ? Out[2]   : Out[13])  ^ {10{InvertOut}};
++assign LinkOut14  = ElecIdleOut[14] ? SYM_IDLE : (ReverseOut ? Out[1]   : Out[14])  ^ {10{InvertOut}};
++assign LinkOut15  = ElecIdleOut[15] ? SYM_IDLE : (ReverseOut ? Out[0]   : Out[15])  ^ {10{InvertOut}};
+ 
+ endmodule
+ 
+@@ -395,7 +392,8 @@
+   parameter  LinkWidth         = 16,
+   parameter  NodeNum           = 8,
+   parameter  EndPoint          = 0,
+-  parameter  Gen2Clk           = 0
++  parameter  Gen2Clk           = 0,
++  parameter  RX_RETIME          = 0    // openPCIE: 1, the receiver for a partner on its own clock (Serialiser)
+ )
+ (
+   input      Clk,
+@@ -413,9 +411,13 @@
+   output     LinkOut0,   LinkOut1,   LinkOut2,   LinkOut3,
+   output     LinkOut4,   LinkOut5,   LinkOut6,   LinkOut7,
+   output     LinkOut8,   LinkOut9,   LinkOut10,  LinkOut11,
+-  output     LinkOut12,  LinkOut13,  LinkOut14,  LinkOut15
++  output     LinkOut12,  LinkOut13,  LinkOut14,  LinkOut15,
++
++  output [15:0] LinkOutN               // openPCIE: the pairs' N: ~LinkOut, or 0 with it in electrical idle
+ );
+ 
++import openPCIE_BFM_pkg::*;
++
+ wire [9:0] PLinkIn0,   PLinkIn1,   PLinkIn2,   PLinkIn3;
+ wire [9:0] PLinkIn4,   PLinkIn5,   PLinkIn6,   PLinkIn7;
+ wire [9:0] PLinkIn8,   PLinkIn9,   PLinkIn10,  PLinkIn11;
+@@ -428,8 +430,9 @@
  
  wire       Gen2ClkSel;
  wire       serclk_main;
@@ -2177,7 +2910,7 @@
  
  //-------------------------------------------------------------
  // Select serial clock
-@@ -435,17 +443,19 @@
+@@ -443,17 +446,19 @@
  
  // If using  GEN2 clocks, use a clock mux to control the serial clock speed
  // (The main clock is controlled inside the PcieVhost component.)
@@ -2204,7 +2937,7 @@
  end
  
    // Clock mux to select between GEN1 (divide by 2) or GEN2 serial clocks.
-@@ -458,6 +468,7 @@
+@@ -466,6 +471,7 @@
      .clkout           (serclk_main)
    );
  
@@ -2212,7 +2945,7 @@
  endgenerate
  
    assign SerClkOut         = serclk_main;
-@@ -481,10 +492,8 @@
+@@ -489,10 +495,8 @@
      
      .ClkOut            (ClkOut),
      
@@ -2224,17 +2957,39 @@
      .LinkIn0           (PLinkIn0),
      .LinkIn1           (PLinkIn1),
      .LinkIn2           (PLinkIn2),
-@@ -525,6 +534,7 @@
+@@ -531,12 +535,14 @@
+ // Instantiate a serialiser
+ //-------------------------------------------------------------
  
-   Serialiser serdes (
+-  Serialiser serdes (
++  Serialiser #(.RX_RETIME(RX_RETIME)) serdes (   // openPCIE: RX_RETIME
      .SerClk     (serclk_main),
 +    .RxIdle     (SerIdle),
      .BitReverse (1'b0),
  
      .ParInVec   ({PLinkOut15, PLinkOut14, PLinkOut13, PLinkOut12, PLinkOut11, PLinkOut10, PLinkOut9, PLinkOut8,
---- a/verilog/pcieVHost/pcieVHostPipex1.v
-+++ b/verilog/pcieVHost/pcieVHostPipex1.v
-@@ -45,16 +45,15 @@
+                   PLinkOut7,  PLinkOut6,  PLinkOut5,  PLinkOut4,  PLinkOut3,  PLinkOut2,  PLinkOut1, PLinkOut0}),
++    .SerOutN    (LinkOutN),                      // openPCIE
+     .SerOut     ({LinkOut15,  LinkOut14,  LinkOut13,  LinkOut12,  LinkOut11,  LinkOut10,  LinkOut9,  LinkOut8,
+                   LinkOut7,   LinkOut6,   LinkOut5,   LinkOut4,   LinkOut3,   LinkOut2,   LinkOut1,  LinkOut0}),
+     .SerIn      ({LinkIn15,   LinkIn14,   LinkIn13,   LinkIn12,   LinkIn11,   LinkIn10,   LinkIn9,   LinkIn8,
+--- a/verilog/pcieVHost/pcieVHostPipex1.sv
++++ b/verilog/pcieVHost/pcieVHostPipex1.sv
+@@ -21,11 +21,8 @@
+ //
+ //=============================================================
+ 
+-`ifdef VPROC_SV
+-`include "allheaders.svh"
+-`endif
+-
+-`WsTimeScale
++// openPCIE: no `include, no `timescale (the simulator's command line gives
++// it): the register map and symbol codes come from openPCIE_BFM_pkg
+ 
+ //-------------------------------------------------------------
+ // pcieVhostPipex1 module
+@@ -45,16 +42,15 @@
    output                         Gen2ClkSel,
    output                         ClkOut,
  
@@ -2257,7 +3012,16 @@
  
    // Transaction taps (openPCIE), on ClkOut: see pcieVHost.v
    output [31:0]                  TlpTxData,
-@@ -89,20 +88,52 @@
+@@ -67,6 +63,8 @@
+   output                         DllpRxValid
+ );
+ 
++import openPCIE_BFM_pkg::*;
++
+ //-------------------------------------------------------------
+ // Local parameter constant definitions
+ //-------------------------------------------------------------
+@@ -89,20 +87,52 @@
  wire                         pclk_main;
  wire                         pcieclk_main;
  
@@ -2265,7 +3029,18 @@
 -reg                          pclk_div2;
 +bit                          pcieclk_div2;
 +bit                          pclk_div2;
-+
+ 
+-reg   [DataWidth-1:0]        RxDataSample;
+-reg   [DataWidth/8-1:0]      RxDataKSample;
+-reg   [DataWidth-1:0]        TxDataPipe;
+-reg   [DataWidth/8-1:0]      TxDataKPipe;
+-
+-integer                      rxcount;
+-
+-`ifdef VERILATOR
+-wire [15:0] ElecIdleOutInt;
+-assign ElecIdleOut            = ElecIdleOutInt[0];
+-`endif
 +bit   [DataWidth-1:0]        RxDataSample;
 +bit   [DataWidth/8-1:0]      RxDataKSample;
 +bit   [DataWidth-1:0]        TxDataPipe;
@@ -2274,8 +3049,8 @@
 +int                          rxcount;
 +
 +// openPCIE: the core's electrical idle (its ElecIdleOut) goes out as NOSIG; a
-+// received NOSIG is the partner's idle, to the core's ElecIdleIn
-+localparam [8:0]             NOSIG_SYM   = {1'b1, `NOSIG};   // {K, byte}
++// received NOSIG is the partner's idle, to the core's ElecIdleIn. NOSIG_SYM:
++// openPCIE_BFM_pkg
 +logic [15:0]                 ElecIdleOutInt;
 +logic                        LinkOutIdle;
 +logic [7:0]                  LinkOutData;
@@ -2295,23 +3070,12 @@
 +// is idle (NOSIG with the K flag), both ways
 +bit   [7:0]                  LinkOutDataQ;
 +bit                          LinkOutKQ;
- 
--reg   [DataWidth-1:0]        RxDataSample;
--reg   [DataWidth/8-1:0]      RxDataKSample;
--reg   [DataWidth-1:0]        TxDataPipe;
--reg   [DataWidth/8-1:0]      TxDataKPipe;
--
--integer                      rxcount;
--
--`ifdef VERILATOR
--wire [15:0] ElecIdleOutInt;
--assign ElecIdleOut            = ElecIdleOutInt[0];
--`endif
++
 +always_ff @(negedge pcieclk_main or negedge nreset)
 +begin
 +  if (nreset == 1'b0)
 +  begin
-+    LinkOutDataQ             <= `NOSIG;
++    LinkOutDataQ             <= NOSIG_SYM[7:0];
 +    LinkOutKQ                <= 1'b1;
 +  end
 +  else
@@ -2323,7 +3087,7 @@
  
  //-------------------------------------------------------------
  // Select local clocks
-@@ -117,20 +148,22 @@
+@@ -117,20 +147,22 @@
    else
    begin
  
@@ -2356,7 +3120,7 @@
      end
  
      clkmux clkmux_pclk
-@@ -164,32 +197,60 @@
+@@ -164,32 +196,60 @@
      assign TxSampleClk        = pcieclk_main;
      assign RxDataSampleShift  = RxData;
      assign RxDataKSampleShift = RxDataK;
@@ -2395,7 +3159,7 @@
 +    // shift ran in reset too, and at time 0 this edge read LinkOutData before
 +    // its assign had settled: a Z symbol on the line under Icarus, and the
 +    // partner left Detect at once
-+    TxDataPipe               <= {(DataWidth/8){`NOSIG}};
++    TxDataPipe               <= {(DataWidth/8){NOSIG_SYM[7:0]}};
 +    TxDataKPipe              <= {(DataWidth/8){1'b1}};
 +  end
 +  else
@@ -2417,12 +3181,12 @@
    if (nreset == 1'b0)
    begin
      rxcount                  <= 0;
-+    RxDataSample             <= {(DataWidth/8){`NOSIG}};
++    RxDataSample             <= {(DataWidth/8){NOSIG_SYM[7:0]}};
 +    RxDataKSample            <= {(DataWidth/8){1'b1}};
    end
    else
    begin
-@@ -212,17 +273,21 @@
+@@ -212,17 +272,21 @@
      end
    end
  
@@ -2440,7 +3204,7 @@
 -  TxDataK                    <= TxDataKPipe;
 +  if (nreset == 1'b0)
 +  begin
-+    TxData                   <= {(DataWidth/8){`NOSIG}};
++    TxData                   <= {(DataWidth/8){NOSIG_SYM[7:0]}};
 +    TxDataK                  <= {(DataWidth/8){1'b1}};
 +  end
 +  else
@@ -2451,7 +3215,7 @@
  end
  
  //-------------------------------------------------------------
-@@ -244,20 +309,18 @@
+@@ -244,20 +308,18 @@
  
      .ClkOut                (ClkOut),
  
@@ -2472,11 +3236,11 @@
 -    .LinkIn10              ({10{1'bZ}}), .LinkIn11 ({10{1'bZ}}), .LinkIn12 ({10{1'bZ}}),
 -    .LinkIn13              ({10{1'bZ}}), .LinkIn14 ({10{1'bZ}}), .LinkIn15 ({10{1'bZ}}),
 +    // Unused inputs (openPCIE: 0, idle on ElecIdleIn; upstream Z)
-+    .LinkIn1               (10'h000), .LinkIn2  (10'h000), .LinkIn3  (10'h000),
-+    .LinkIn4               (10'h000), .LinkIn5  (10'h000), .LinkIn6  (10'h000),
-+    .LinkIn7               (10'h000), .LinkIn8  (10'h000), .LinkIn9  (10'h000),
-+    .LinkIn10              (10'h000), .LinkIn11 (10'h000), .LinkIn12 (10'h000),
-+    .LinkIn13              (10'h000), .LinkIn14 (10'h000), .LinkIn15 (10'h000),
++    .LinkIn1               ('0), .LinkIn2  ('0), .LinkIn3  ('0),
++    .LinkIn4               ('0), .LinkIn5  ('0), .LinkIn6  ('0),
++    .LinkIn7               ('0), .LinkIn8  ('0), .LinkIn9  ('0),
++    .LinkIn10              ('0), .LinkIn11 ('0), .LinkIn12 ('0),
++    .LinkIn13              ('0), .LinkIn14 ('0), .LinkIn15 ('0),
  
      // Link lane output
      .LinkOut0              (LinkOut),

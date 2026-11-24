@@ -155,21 +155,22 @@ No `` `timescale `` in the HDL. The simulator command line gives it; 1ns/10ps he
 | XSIM | `xelab --timescale 1ns/10ps` |
 | JanusHDL | none: 1ns/1ps is fixed |
 
-The models' delays carry units, so any unit works. Clocks set in ps are written `#(N * 1ns / 1000.0)`, not `#(N * 1ps)`: the standard rounds a time literal to the precision (IEEE 1800-2017 5.8), so at 10 ps `1ps` is 0 and the clock stops (Icarus and JanusHDL round; Verilator and XSIM do not). `4.build/build-vip.sh` empties upstream's `WsTimeScale` and `VProcTimeScale`.
+The models' delays carry units, so any unit works. Clocks set in ps are written `#(N * 1ns / 1000.0)`, not `#(N * 1ps)`: the standard rounds a time literal to the precision (IEEE 1800-2017 5.8), so at 10 ps `1ps` is 0 and the clock stops (Icarus and JanusHDL round; Verilator and XSIM do not). Upstream's timescale macros (`WsTimeScale`, `VProcTimeScale`) are gone from the HDL.
 
-No `#` delay on register outputs or inputs: `build-vip.sh` removes upstream's `` #`RegDel `` (its registers), `` #`PcieVHostSampleDel `` (its link inputs) and VProc's `` <= `MINDELAY `` (`Update`); VProc's `` `MINDELAY `` (`#0`) before `VInit` becomes a non-blocking assignment whose edge calls it (`1.upstream/patches/f_VProc-vinit.patch`). Plain non-blocking assignments, so no delay hides a race at a clock edge. Verilator also runs 2 to 3 times faster without them (self-test run: 1.53 s to 0.52 s at x1, 1.59 s to 0.72 s at x4); Icarus, XSIM and JanusHDL within 3%.
+No `#` delay on register outputs or inputs, in the source: our patches delete upstream's `` #`RegDel `` (its registers), `` #`PcieVHostSampleDel `` (its link inputs) and VProc's `` <= `MINDELAY `` (`Update`); VProc's `` `MINDELAY `` (`#0`) before `VInit` becomes a non-blocking assignment whose edge calls it (`1.upstream/patches/f_VProc.patch`). Plain non-blocking assignments, so no delay hides a race at a clock edge. Verilator also runs 2 to 3 times faster without them (self-test run: 1.53 s to 0.52 s at x1, 1.59 s to 0.72 s at x4); Icarus, XSIM and JanusHDL within 3%.
 
 ## Build defines
 
 | Define | Set by | Effect |
 |---|---|---|
 | `EXCLUDE_LTSSM` | the user's make file | leaves the LTSSM out of the pcieVHost model; the user code links `3.sw/ltssm/ltssm.c` instead |
-| `VPROC_SV` | `4.build/build-vip.sh` (DPI-C build) | VProc over SystemVerilog DPI-C: Verilator, XSIM, JanusHDL |
-| `ICARUS`, `VPROC_PLI_VPI`, `EXTERN_VPI_TABLE`, `_REENTRANT` | `4.build/build-vip.sh` (VPI build) | VProc and pcieVHost over VPI for Icarus; the VPI table comes from pcieVHost's `veriuser.c`; thread-safe C library calls |
-| `VPROC_BYTE_ENABLE` | the user's make file | byte enables on the VProc bus, in VProc and pcieVHost (`BE` port) |
+| `VPROC_SV` | `4.build/build-vip.sh` (DPI-C build), the C user code | VProc's C side over SystemVerilog DPI-C: Verilator, XSIM, JanusHDL |
+| `ICARUS`, `VPROC_PLI_VPI`, `EXTERN_VPI_TABLE`, `ENABLE_MEM_PLI`, `_REENTRANT` | `4.build/build-vip.sh` (VPI build) | VProc, pcieVHost and mem_model over VPI for Icarus; the VPI table comes from pcieVHost's `veriuser.c` (with `$memread`, `$memwrite`); thread-safe C library calls |
 | `VPROC_THREADS` | the user's make file | VProc keeps one thread per node instead of coroutines (sanitizer runs) |
 
-`2.rtl/mem_model.sv` exists only to wrap upstream's `mem_model.v` (kept as `f_mem_model.sv`) in Verilator `lint_off` pragmas, so third-party code stays out of a user's lint.
+These are C defines. The HDL takes none: no include file, no macro. [`openPCIE_BFM_pkg.sv`](openPCIE_BFM_pkg.sv), compiled first, holds what upstream's headers did (the register map, the symbol codes, VProc's access word, the C calls), typed. Its one tool split is Icarus's own `` `__ICARUS__ ``: VPI system tasks there, DPI-C imports elsewhere. VProc's byte enables are always on and its burst interface off (upstream's `VPROC_BYTE_ENABLE`, `VPROC_BURST_IF`, as every build set them); mem_model has no RX stall port and no TX byte enables.
+
+`f_mem_model.sv` (upstream's `mem_model.v`) carries Verilator `lint_off` pragmas from `1.upstream/patches/f_mem_model.patch`, so third-party code stays out of a user's lint.
 
 ## From XSIM to Verilator, via Icarus
 
@@ -179,7 +180,7 @@ openPCIE ran this model on XSIM only; openCologne-PCIE moved it to Verilator and
 2. **Every referenced module must exist.** The pcieVHost wrappers instantiate `clkmux` and `Serialiser` (from pcieVHost's `verilog/lib`), never compiled by the XSIM file list. Verilator wants every referenced module, so the VIP build now collects them.
 3. **Electrical idle: `NOSIG`.** An electrically idle PCIE line carries no signal. Upstream models it as `Z` on a 4-state simulator, and under Verilator (2-state) as zeros plus a side-band, `ElecIdleOut` and `ElecIdleIn`. openPCIE's patch drops both: each idle symbol on the PIPE is `NOSIG`, the K flag and `0xFF` (no 8b/10b code), on Verilator and Icarus alike. Verilator can't be trusted with `Z` here: its `=== 'z` reads a driven 0 as `Z` ([#17](https://github.com/chili-chips/openCologne-PCIE/issues/17)).
 4. **One LTSSM on both sides.** On openPCIE the model plays the EP, an upstream port, against a real `PCIE_2_1` downstream port; the patch makes it spec-correct: an upstream port keeps sending Link/Lane = PAD in its TS1 until the downstream port assigns the numbers. Upstream's model takes a shortcut that only works against a copy of itself, so the patched EP would deadlock in Configuration.Start against pcieVHost's own RC, on both simulators. With upstream's RC as our host, we used upstream's `ltssm.c`. The host is now openPCIE's Artix-7 RC model, which assigns Link and Lane numbers as the hard macro does, so both sides use openPCIE's `ltssm.c`, patch included.
-5. **Macros before models.** The pcieVHost models use macros (`WsTimeScale`, `RegDel`, the comma symbols, the register map) from its headers. Under Verilator the first file in the list happened to pull them in for all others; not under Icarus. [`tb.f`](https://github.com/chili-chips/openCologne-PCIE/blob/main/5.sim/tb.f) now names `allheaders.svh` first, for both.
+5. **A package, not macros.** The pcieVHost models took macros (`WsTimeScale`, `RegDel`, the comma symbols, the register map) from `` `include `` headers; under Verilator the first file in the list happened to pull them in for all others, not under Icarus. Now there are no headers: `openPCIE_BFM_pkg.sv` comes first in every file list, and each model imports it.
 6. **Portable delays.** Delays carry units and the timescale comes from the command line ([Timescale](#timescale)); the run limit is a 64-bit constant, as 10 ms in picoseconds overflows 32 bits.
 
 --------------------

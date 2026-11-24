@@ -32,7 +32,7 @@
 //==========================================================================
 
 module pipe_phy_core
-  import pipe_sym_pkg::*;
+  import openPCIE_BFM_pkg::*;
 #(
     parameter int LANES         = 1,
     parameter int BYTES         = 2,    // symbols per lane per PCLK

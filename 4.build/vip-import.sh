@@ -100,6 +100,8 @@ sed "s/0x/32'h/;s/#/\`/;s/DEFINES/AUTO GENERATED. DO NOT EDIT!/;" "$P/src/pcie_v
 
 # ---- mem_model (its C model is part of pcieVHost) -------------------------------
 for f in mem_model.v mem_model_dpi.vh LICENSE README.md; do cp_lf "$U/mem_model/$f" "$D/mem_model/$f"; done
+# no `timescale in the HDL: the simulator command line gives it
+sed -i '/^`timescale/d' "$D/mem_model/mem_model.v"
 
 # ---- SystemVerilog names: modules .sv, `include headers .svh ------------------
 for f in "$D"/vproc/f_VProc.v "$P"/verilog/pcieVHost/*.v "$P"/verilog/lib/*.v; do

@@ -10,6 +10,8 @@
 #   make [SIM=...] run     build and run; exit 0 on RC MODEL RESULT: PASS
 #   make all-sims          run on every simulator, one line each
 #   make regress           the tester over seeds 1 to SEEDS
+#   make mutants           the checker against broken endpoints: each must fail
+#                          its rule (../4.build/mutants.py, MUTANT_JOBS at a time)
 #   make sanity            the sanity list (run-sanity.sh), a few minutes
 #   make regression        the regression list (run-regression.sh)
 #   make lint              Verible on our SystemVerilog (../4.build/lint.verible)
@@ -28,6 +30,9 @@
 # WRAP   n (default): both nodes in PIPExN__pcieVHost; x1: RCPIPEx1__pcieVHost
 #        and PIPEx1__pcieVHost (x1, Gen1 only)
 # SEED   the tester's random stimulus (default 1), read at run time
+# MIX    the tester's random mix: N writes and reads (default 64), read at
+#        run time; sustained load, as on hardware. About 0.4 us a request:
+#        MIX=1000 ends at 890 us; above MIX=3000 raise RUN_US
 # RUN_US time limit in us (default 2000)
 # SEEDS  make regress: seeds 1 to SEEDS (default 10), REGRESS_JOBS at a time
 #        (default 4), by ../4.build/regress.sh; Verilator or Icarus
@@ -47,8 +52,12 @@ GEN    ?= $(if $(or $(filter 4,$(LANES)),$(filter x1,$(WRAP))),1,2)
 PHY    ?= none
 A7RC   ?= 0
 SEED   ?= 1
+MIX    ?= 64
 RUN_US ?= 2000
 WAVES  ?= 0
+IFACE  ?= pipe
+PPM    ?= 0
+RETIME ?= 1
 
 ifeq ($(filter n x1,$(WRAP)),)
   $(error WRAP must be n or x1 (got "$(WRAP)"))
@@ -86,7 +95,7 @@ REGRESS_QUIET ?= 1
 
 BFM        := $(abspath $(CURDIR)/..)
 WORK       := $(CURDIR)/work
-CFG         = $(WRAP).x$(LANES)g$(GEN).$(PHY)$(if $(filter 1,$(A7RC)),.a7rc)
+CFG         = $(if $(filter serial,$(IFACE)),serial.x$(LANES)g$(GEN).ppm$(PPM).rt$(RETIME),$(WRAP).x$(LANES)g$(GEN).$(PHY))$(if $(filter 1,$(A7RC)),.a7rc)
 OBJDIR      = $(WORK)/$(SIM)/$(CFG)$(if $(filter 1,$(WAVES)),.waves)
 WAVES_OUT   = $(WORK)/waves/$(SIM).$(CFG)
 
@@ -98,7 +107,7 @@ VERILATOR  ?= verilator
 IVERILOG   ?= iverilog
 VVP        ?= vvp
 JHDL       ?= jhdl
-XILINX_VIVADO ?= $(HOME)/Xilinx/2026.1/Vivado
+XILINX_VIVADO ?= $(HOME)/Xilinx/2026.2/Vivado
 XVLOG      ?= $(XILINX_VIVADO)/bin/xvlog
 XELAB      ?= $(XILINX_VIVADO)/bin/xelab
 XSIM       ?= $(XILINX_VIVADO)/bin/xsim
@@ -117,7 +126,7 @@ OPTFLAG    ?= -O2 -g
 CPPSTD      = -std=c++20
 INCLPATHS   = -I$(CURDIR)/usercode -I$(BFM)/3.sw/a7rc -I$(VIP_DIR)/include
 DEFS        = -DVPROC -DEXCLUDE_LTSSM -DEP_GEN=$(GEN) -DRC_GEN=$(GEN) -DA7RC_LITERAL=$(A7RC) \
-              -DLANE_REV_EP=1 -DLANE_REV_RC=0
+              -DLANE_REV_EP=1 -DLANE_REV_RC=0 $(if $(filter serial,$(IFACE)),-DSIM_SERIAL)
 ifeq ($(SIM),icarus)
   ICA_INC   = $(dir $(shell command -v $(IVERILOG)))../include/iverilog
   ICA_LIB   = $(dir $(shell command -v $(IVERILOG)))../lib
@@ -131,33 +140,35 @@ VOBJS       = $(addprefix $(OBJDIR)/,$(patsubst %.cpp,%.o,$(patsubst %.c,%.o,$(n
 USERLIB     = $(OBJDIR)/libuser.a
 
 # ---- HDL ----------------------------------------------------------------------
-# The models' sources in compile order. Verilator and XSIM read every file of
-# 2.rtl/ (but mem_model.sv: nothing here instantiates it), so the self-test
-# also compiles what it does not run. Icarus 14 and JanusHDL 0.17 get only
-# what this run uses: neither parses pipe_mac_adapter.sv's assertions, and
-# Icarus not PIPExN__pcieVHost.sv (an automatic variable in an always block)
-HDL_ALL     = $(filter verilator xsim,$(SIM))
-USE_XN      = $(or $(HDL_ALL),$(filter n,$(WRAP)))
-USE_X1      = $(or $(HDL_ALL),$(filter x1,$(WRAP)))
-HDL_INC     = $(VIP_DIR)/hdl/headers $(VIP_DIR)/hdl
-HDL_SRC     = $(VIP_DIR)/hdl/headers/allheaders.svh \
+# The models' sources in compile order: openPCIE_BFM_pkg first (no include
+# files, no include path). Verilator and XSIM read every file of 2.rtl/, so the
+# self-test also compiles what it does not run; so does JanusHDL. Icarus 14
+# gets only what this run uses: it parses neither pipe_mac_adapter.sv's
+# assertions nor PIPExN__pcieVHost.sv (an automatic variable in an always
+# block, iverilog#1789, fixed after our build). mem_model (f_mem_model.sv):
+# nothing here instantiates it
+HDL_ALL     = $(filter verilator xsim janushdl,$(SIM))
+USE_PIPE    = $(filter pipe,$(IFACE))
+USE_XN      = $(or $(HDL_ALL),$(and $(USE_PIPE),$(filter n,$(WRAP))))
+USE_X1      = $(or $(HDL_ALL),$(and $(USE_PIPE),$(filter x1,$(WRAP))))
+HDL_SRC     = $(BFM)/2.rtl/openPCIE_BFM_pkg.sv \
               $(VIP_DIR)/hdl/f_VProc.sv \
               $(VIP_DIR)/hdl/clkmux.sv \
               $(VIP_DIR)/hdl/Serialiser.sv \
               $(VIP_DIR)/hdl/pcieVHost.sv \
               $(VIP_DIR)/hdl/pcieVHostPipex1.sv \
-              $(BFM)/2.rtl/pipe_sym_pkg.sv \
               $(if $(USE_XN),$(BFM)/2.rtl/pcieVHostPipexN.sv $(BFM)/2.rtl/PIPExN__pcieVHost.sv) \
               $(if $(USE_X1),$(BFM)/2.rtl/PIPEx1__pcieVHost.sv $(BFM)/2.rtl/RCPIPEx1__pcieVHost.sv) \
               $(if $(or $(HDL_ALL),$(filter core,$(PHY))),$(BFM)/2.rtl/pipe_phy_core.sv $(BFM)/2.rtl/pipe_mac_adapter.sv) \
               $(if $(or $(HDL_ALL),$(WAVES_X4)),$(BFM)/2.rtl/pipe_x4_view.sv) \
-              $(CURDIR)/tb.sv
+              $(CURDIR)/$(if $(filter serial,$(IFACE)),tb_serial.sv,tb.sv)
 # No `timescale in the HDL: each simulator gets 1ns/10ps on its command line
 # (Verilator --timescale, Icarus +timescale+ in a command file, xelab
-# --timescale; JanusHDL has 1ns/1ps fixed). The models' delays carry units.
+# --timescale, JanusHDL --timescale). The models' delays carry units.
 TIMESCALE   = 1ns/10ps
-HDL_DEFS    = VPROC_BYTE_ENABLE SIM_LANES=$(LANES) RUN_US=$(RUN_US) $(if $(filter core,$(PHY)),SIM_PIPE_PHY) \
-              $(if $(filter x1,$(WRAP)),SIM_PIPEX1) $(if $(filter-out icarus,$(SIM)),VPROC_SV) $(WAVES_DEFS)
+HDL_DEFS    = SIM_LANES=$(LANES) RUN_US=$(RUN_US) $(if $(filter core,$(PHY)),SIM_PIPE_PHY) \
+              $(if $(filter x1,$(WRAP)),SIM_PIPEX1) $(WAVES_DEFS) \
+              $(if $(filter serial,$(IFACE)),SIM_PPM=$(PPM) SIM_RX_RETIME=$(RETIME))
 
 # make WAVES=1: the dump in tb.sv; Verilator and Icarus write FST, XSIM and
 # JanusHDL VCD (converted by vcd2fst)
@@ -169,7 +180,7 @@ VCD2FST    ?= vcd2fst
 PYTHON     ?= python3
 
 # =============================================================================
-.PHONY: all run all-sims regress lint sanity regression clean help FORCE
+.PHONY: all run all-sims regress mutants lint sanity regression clean help FORCE
 .DEFAULT_GOAL := all
 
 $(OBJDIR):
@@ -197,7 +208,7 @@ $(SIMEXE): $(USERLIB) FORCE
 	@[ $(USERLIB) -nt $@ ] && rm -f $@; true
 	@$(VERILATOR) --binary -sv --timing --timescale $(TIMESCALE) --top-module tb -Mdir $(OBJDIR) $(if $(WAVES_ON),--trace-fst) \
 	    -Wno-fatal -Wno-WIDTH -Wno-lint -Wno-style \
-	    $(addprefix +incdir+,$(HDL_INC)) $(addprefix +define+,$(HDL_DEFS)) $(HDL_SRC) \
+	    $(addprefix +define+,$(HDL_DEFS)) $(HDL_SRC) \
 	    -MAKEFLAGS "--quiet CFG_LDFLAGS_VERILATED=" -CFLAGS "$(CPPSTD) -Wno-attributes" \
 	    -LDFLAGS "-Wl,-whole-archive $(USERLIB) -Wl,-no-whole-archive -L$(VIP_DIR)/lib -lcosimlnx -lpcielnx -lpthread -lrt -ldl -rdynamic"
 SIM_CMD     = $(SIMEXE)
@@ -213,7 +224,7 @@ $(OBJDIR)/VProc.vpi: $(USERLIB)
 	    -L$(ICA_LIB) -lvpi -lrt -ldl
 $(SIMEXE): $(OBJDIR)/VProc.vpi FORCE
 	@echo '+timescale+$(TIMESCALE)' > $(OBJDIR)/timescale.f
-	@$(IVERILOG) -g2012 -c $(OBJDIR)/timescale.f -o $@ -s tb $(addprefix -I,$(HDL_INC)) $(addprefix -D,$(HDL_DEFS)) $(HDL_SRC)
+	@$(IVERILOG) -g2012 -c $(OBJDIR)/timescale.f -o $@ -s tb $(addprefix -D,$(HDL_DEFS)) $(HDL_SRC)
 SIM_CMD     = $(VVP) -n -M $(OBJDIR) -m VProc $(SIMEXE) $(if $(WAVES_ON),-fst)
 endif
 
@@ -229,7 +240,7 @@ endif
 ifeq ($(SIM),xsim)
 SIMEXE      = $(OBJDIR)/xsim.dir/tb/xsimk
 $(SIMEXE): $(OBJDIR)/VProc.so FORCE
-	@cd $(OBJDIR) && $(XVLOG) -sv --nolog $(addprefix -i ,$(HDL_INC)) $(addprefix --define ,$(HDL_DEFS)) $(HDL_SRC) > xvlog.out || { cat xvlog.out; exit 1; }
+	@cd $(OBJDIR) && $(XVLOG) -sv --nolog $(addprefix --define ,$(HDL_DEFS)) $(HDL_SRC) > xvlog.out || { cat xvlog.out; exit 1; }
 	@cd $(OBJDIR) && $(XELAB) --nolog -sv_root $(OBJDIR) -sv_lib VProc --timescale $(TIMESCALE) $(if $(WAVES_ON),--debug typical) \
 	    --snapshot tb work.tb > xelab.out || { cat xelab.out; exit 1; }
 SIM_CMD     = $(XSIM) --nolog -R tb
@@ -238,7 +249,7 @@ endif
 # JanusHDL compiles the sources at each run
 ifeq ($(SIM),janushdl)
 SIMEXE      = $(OBJDIR)/VProc.so
-SIM_CMD     = $(JHDL) --top tb $(addprefix +incdir+,$(HDL_INC)) $(addprefix +define+,$(HDL_DEFS)) $(HDL_SRC) \
+SIM_CMD     = $(JHDL) --top tb --timescale $(TIMESCALE) $(addprefix +define+,$(HDL_DEFS)) $(HDL_SRC) \
               --sv-lib $(OBJDIR)/VProc.so
 endif
 
@@ -250,7 +261,7 @@ all: $(SIMEXE)
 # exit code is 0 only on RC MODEL RESULT: PASS (xsim exits 0 after $fatal)
 run: all
 	@cp -f $(CURDIR)/hex/ContDisps.hex $(OBJDIR)/hex/
-	@cd $(OBJDIR) && rm -f tb.fst tb.vcd && A7RC_SEED=$(SEED) $(SIM_CMD) 2>&1 | tee run.log; \
+	@cd $(OBJDIR) && rm -f tb.fst tb.vcd && A7RC_SEED=$(SEED) A7RC_MIX=$(MIX) $(SIM_CMD) 2>&1 | tee run.log; \
 	r=0; grep -a -q 'RC MODEL RESULT: PASS' run.log || r=1; \
 	if [ -n "$(WAVES_ON)" ]; then \
 	  mkdir -p $(WORK)/waves; \
@@ -270,16 +281,22 @@ all-sims:
 # The tester over seeds 1 to SEEDS, each in work/regress/<config>/<seed>/
 regress: all
 	@[ -n "$(filter verilator icarus,$(SIM))" ] || { echo "make regress: SIM=verilator or icarus"; exit 1; }
-	@bash $(BFM)/4.build/regress.sh $(SEEDS) $(REGRESS_JOBS) $(REGRESS_S) $(REGRESS_TRIES) $(REGRESS_QUIET) \
+	@A7RC_MIX=$(MIX) bash $(BFM)/4.build/regress.sh $(SEEDS) $(REGRESS_JOBS) $(REGRESS_S) $(REGRESS_TRIES) $(REGRESS_QUIET) \
 	    $(WORK)/regress/$(SIM).$(CFG) "" -- $(SIM_CMD)
 
 # Verible on our SystemVerilog: 2.rtl/ but the GPL files from upstream
-# (pcieVHostPipexN.sv, mem_model.sv), and the test bench
+# (pcieVHostPipexN.sv, openPCIE_BFM_pkg.sv), and the test benches
 VERIBLE_LINT ?= verible-verilog-lint
-LINT_SRC      = $(filter-out %/pcieVHostPipexN.sv %/mem_model.sv,$(wildcard $(BFM)/2.rtl/*.sv)) $(CURDIR)/tb.sv
+LINT_SRC      = $(filter-out %/pcieVHostPipexN.sv %/openPCIE_BFM_pkg.sv,$(wildcard $(BFM)/2.rtl/*.sv)) $(CURDIR)/tb.sv $(CURDIR)/tb_serial.sv
 
 lint:
 	@$(VERIBLE_LINT) --rules_config=$(BFM)/4.build/lint.verible $(LINT_SRC) && echo "lint: Verible, $(words $(LINT_SRC)) files, clean"
+
+# The checker against broken endpoints, each in work/mutants/<name>/: each
+# must fail the rule it breaks. x1, at the PIPE, without a PHY
+MUTANT_JOBS ?= 3
+mutants:
+	@$(PYTHON) $(BFM)/4.build/mutants.py --jobs $(MUTANT_JOBS) --out work/mutants --need gen2= -- run SIM=$(SIM)
 
 sanity:
 	@bash run-sanity.sh
